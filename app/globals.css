@@ -1,0 +1,221 @@
+@import 'tailwindcss';
+
+/*
+ * GymOS design tokens.
+ * Charcoal + electric blue + vivid teal, tuned for legibility while exercising:
+ * large touch targets, high contrast, restrained motion.
+ */
+@theme {
+  --color-ink-50: #f8fafc;
+  --color-ink-100: #f1f5f9;
+  --color-ink-200: #e2e8f0;
+  --color-ink-300: #cbd5e1;
+  --color-ink-400: #94a3b8;
+  --color-ink-500: #64748b;
+  --color-ink-600: #475569;
+  --color-ink-700: #334155;
+  --color-ink-800: #1e293b;
+  --color-ink-900: #111827;
+  --color-ink-950: #0a0f1a;
+
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+
+  --color-teal-100: #ccfbf1;
+  --color-teal-300: #5eead4;
+  --color-teal-400: #2dd4bf;
+  --color-teal-500: #14b8a6;
+  --color-teal-600: #0d9488;
+
+  --color-ok-500: #16a34a;
+  --color-ok-100: #dcfce7;
+  --color-warn-500: #d97706;
+  --color-warn-100: #fef3c7;
+  --color-bad-500: #dc2626;
+  --color-bad-100: #fee2e2;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --radius-card: 0.875rem;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 8px 24px -12px rgb(15 23 42 / 0.12);
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: var(--color-ink-50);
+  --border: var(--color-ink-200);
+  --border-strong: var(--color-ink-300);
+  --text: var(--color-ink-900);
+  --text-muted: var(--color-ink-500);
+  --text-inverse: #ffffff;
+  --accent: var(--color-brand-600);
+  --accent-hover: var(--color-brand-700);
+  --accent-soft: var(--color-brand-50);
+  --accent-2: var(--color-teal-600);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --surface: var(--color-ink-950);
+  --surface-raised: #121a28;
+  --surface-sunken: #0d141f;
+  --border: #22303f;
+  --border-strong: #324357;
+  --text: var(--color-ink-100);
+  --text-muted: var(--color-ink-400);
+  --text-inverse: var(--color-ink-950);
+  --accent: var(--color-brand-500);
+  --accent-hover: var(--color-brand-400);
+  --accent-soft: #15233c;
+  --accent-2: var(--color-teal-400);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --surface: var(--color-ink-950);
+    --surface-raised: #121a28;
+    --surface-sunken: #0d141f;
+    --border: #22303f;
+    --border-strong: #324357;
+    --text: var(--color-ink-100);
+    --text-muted: var(--color-ink-400);
+    --text-inverse: var(--color-ink-950);
+    --accent: var(--color-brand-500);
+    --accent-hover: var(--color-brand-400);
+    --accent-soft: #15233c;
+    --accent-2: var(--color-teal-400);
+    color-scheme: dark;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+:root[data-text='large'] body {
+  font-size: 1.0625rem;
+}
+
+:root[data-contrast='high'] {
+  --border: var(--color-ink-500);
+  --text-muted: var(--color-ink-700);
+}
+
+:root[data-contrast='high'][data-theme='dark'] {
+  --border: var(--color-ink-400);
+  --text-muted: var(--color-ink-200);
+}
+
+/* Respect the OS setting and the in-app accessibility preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@utility surface {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+@utility muted {
+  color: var(--text-muted);
+}
+
+@utility skeleton {
+  background: linear-gradient(90deg, var(--surface-sunken) 25%, var(--border) 50%, var(--surface-sunken) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 6px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility fade-up {
+  animation: fade-up 0.28s ease-out both;
+}
+
+/* Scrollbars stay unobtrusive but visible enough to find. */
+@media (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    border: 2px solid var(--surface);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
