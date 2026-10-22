@@ -128,4 +128,10 @@ Drizzle ORM · SQLite (better-sqlite3) · Zod · Recharts · Lucide · Vitest ·
 
 ## Licence
 
-No licence has been chosen for this build.
+[MIT](LICENSE). Use it, modify it, ship it.
+
+One caveat worth repeating: the exercise and recipe text in `lib/content/` is an
+in-house draft that has **not** been reviewed by a qualified coach or dietitian, and
+every record carries `review_status: 'draft'`. The licence lets you reuse it; it does not
+make it professionally reviewed. If you put it in front of real users, get it reviewed
+first.
