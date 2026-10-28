@@ -3,18 +3,27 @@
 **Fitness that fits real life.**
 
 A personal fitness operating system: equipment-aware workout planning, adaptive
-re-planning when your week changes, flexible meal planning, and progress tracking built
-only from what you actually logged.
+re-planning when your week changes, flexible meal planning, progress tracking built only
+from what you actually logged — and a set of personal-care modules for the rest of it:
+a private photo journal, skincare and grooming routines, a digital wardrobe with an
+offline outfit engine, speaking practice, hygiene routines, and one honest review across
+all of it.
 
-One app. Your equipment. Your workouts. Your meals. Your progress.
+One app. Your equipment. Your workouts. Your meals. Your routines. Your own records.
+
+It is as notable for what it refuses to do. There is no appearance or body scoring, no
+transcription of your recordings, no skin diagnosis and no cleanliness score — each
+absent by design, enforced in code, and stated plainly in the interface rather than left
+for you to discover. See [WELLNESS.md](WELLNESS.md).
 
 ---
 
 ## What this build is
 
 A working local application. Accounts, onboarding, equipment profiles, workout
-generation, guided logging, adaptive re-planning, meal planning, grocery lists and
-progress analytics are all implemented against a real database with real domain logic.
+generation, guided logging, adaptive re-planning, meal planning, grocery lists, progress
+analytics, and the personal-care modules — including an encrypted private-media pipeline
+— are all implemented against a real database with real domain logic.
 
 It needs **no API keys at all**. No OpenAI, Anthropic, Gemini, Supabase, Firebase,
 Google OAuth, wearable, payment, cloud-storage or email credentials. `npm run setup`
