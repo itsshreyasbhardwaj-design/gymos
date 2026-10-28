@@ -3,6 +3,10 @@ node_modules/
 out/
 data/*.db
 data/*.db-*
+# Private media: encrypted photographs and recordings, plus the development key that
+# decrypts them. Committing either would hand over the files and the means to read them.
+data/media/
+**/.media-key
 .env
 .env.local
 coverage/

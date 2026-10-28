@@ -66,9 +66,22 @@ integration boundary with no fake payments.
 **Gate met:** free and premium capabilities are correctly enforced without fake payments.
 
 ### Phase 9 — Verification
-317 unit and integration tests, 59 end-to-end tests across three viewports, a 10-point
-critical safety suite, content validation, a security review that found and fixed three
-real bugs, and this documentation set.
+Unit and integration tests, end-to-end tests across three viewports, a 10-point critical
+safety suite, content validation, a security review that found and fixed three real bugs,
+and this documentation set.
+
+### Phase 10 — Personal wellness modules
+Photo journal and check-ins, skincare and grooming, Style OS, Voice and communication
+OS, hygiene routines, and the unified cross-module review — 15 routes, 27 tables, an
+encrypted private-media pipeline, and five new FitBrain capabilities with three new
+honest refusals. Built against the existing accounts, authorization, entitlements,
+consent, export and deletion rather than beside them. See [WELLNESS.md](WELLNESS.md).
+
+Each module was then adversarially audited by an independent pass, which produced 26
+findings — including an application-wide `Permissions-Policy` that silently made the
+voice recorder impossible, a fabricated 0.5 colour score presented as a measurement, a
+patch-test outcome that defaulted to the reassuring answer, and encrypted media that was
+not in `.gitignore`. All of them are recorded in `SECURITY.md` or were fixed in place.
 
 ---
 
@@ -84,6 +97,11 @@ real bugs, and this documentation set.
 | **Coach review architecture** | Authorization boundaries exist. Trainer accounts need qualification verification, which is an operational process. |
 | **Gym partner portal** | Venue and inventory tables with review status exist. A multi-tenant portal is its own product. |
 | **Biometric integrations** | Consent records and data shapes exist. Connecting them needs platform entitlements and a native shell. |
+| **Speech recognition for voice practice** | Needs either a paid API (excluded by design) or a local model whose accuracy has been measured. A transcript that is wrong is worse than none, and a *simulated* one would be a lie. So GymOS measures what it honestly can and says plainly that nothing is transcribed. |
+| **Photo or voice capture for under-18 accounts** | Needs a verified parental-consent mechanism and a legal review of children's-data rules in each jurisdiction. Refused at the service layer until both exist. Every other personal-care feature is available to them. |
+| **Media key rotation** | Needs a re-encryption pass with a key-version column and a tested rollback. Changing `GYMOS_MEDIA_KEY` today makes existing files unreadable, which `ENVIRONMENT.md` states plainly. |
+| **Creating a media share** | The grant model, the authenticated read path and the revoke controls all exist and are tested. What is missing is how you name a recipient: an email lookup would leak whether an account exists, and GymOS has no other user-discovery surface by design. Needs an invite-token design, not a search box. |
+| **Photographs on a skincare journal entry** | Skin photographs live in the photo journal, which has a dedicated `skin` view and one privacy surface. A second place to attach photos would split the consent and deletion controls, so the skincare page points at the journal instead of offering a field. |
 
 ### Not started
 
@@ -102,18 +120,24 @@ In the order they should actually be done:
    qualified dietitian signing off the library is the single highest-value next step, and
    it blocks any public launch.
 2. **Legal review**, especially children's-data rules, since under-13 accounts are
-   supported.
+   supported — and specifically a parental-consent mechanism, which is the only thing
+   standing between under-18 accounts and the photo and voice features.
 3. **Email provider.** Without it there is no password reset, so a forgotten password is
    an unrecoverable account.
-4. **Backups and a tested restore.**
+4. **Backups and a tested restore**, including the encrypted media directory and its
+   key. A database backup without the key restores unreadable files.
 5. **Independent security review.**
 6. **Content-Security-Policy with nonces** (`SECURITY.md` residual risk 2).
 7. **Async service layer and PostgreSQL** (`DEPLOYMENT.md`) — needed before more than one
    instance can run.
 8. **Component tests and an automated accessibility audit** to close the stated gaps in
    `TESTING.md`.
-9. **Razorpay**, only after 1–5.
-10. **GymScan**, only with a model whose accuracy has been measured.
+9. **Honour the stored timezone.** Every "today" is currently computed in UTC, so for an
+   India-first product the day turns over at 05:30 local. The profile already stores a
+   timezone; nothing reads it. This touches every date computation, so it is a single
+   deliberate change rather than something to patch per page.
+10. **Razorpay**, only after 1–5.
+11. **GymScan**, only with a model whose accuracy has been measured.
 
 ---
 
@@ -126,3 +150,5 @@ In the order they should actually be done:
 | Publishing content as professionally reviewed | A named qualified reviewer and an audit trail |
 | Claiming any compliance certification | An actual audit |
 | Trainer marketplace | Qualification verification procedures |
+| Photo or voice capture for under-18 accounts | A verified parental-consent mechanism and a legal review |
+| Any automated judgement of appearance or voice | Nothing. This is not blocked, it is refused: there is no schema column for it and a test fails if one appears |

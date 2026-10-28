@@ -17,8 +17,18 @@ missing. Nothing is.
 | --- | --- | --- |
 | `GYMOS_DB_PATH` | `./data/gymos.db` | SQLite file location. Used by the test and end-to-end harnesses to isolate databases. |
 | `GYMOS_IP_SALT` | `gymos-local-dev-salt` | Salt for hashing IP addresses in session and audit rows. **Set this to a long random value in any shared deployment** — the default makes hashes comparable across installs. |
+| `GYMOS_MEDIA_PATH` | `./data/media` | Where encrypted photographs and recordings are written. Must be **outside** any served directory. |
+| `GYMOS_MEDIA_KEY` | — | Secret the AES-256-GCM media key is derived from (scrypt). With none set, GymOS generates a random per-install key and stores it at `<media path>/.media-key`, mode `0600`. That is fine for a personal local install and nothing more: the key sits beside the ciphertext, and losing the file makes every stored photo and recording permanently unreadable. The app reports which mode it is in — on the media-privacy screen, in FitBrain and in the data export — rather than implying managed key handling it does not have. **Set this to a long random secret before anyone else's media is stored.** |
 | `NODE_ENV` | — | `production` marks session cookies `Secure`. |
 | `PORT` | 3100 dev / 3100 start | Next.js port. |
+
+### Rotating the media key
+
+There is no rotation path in this build, and pretending otherwise would be worse than
+saying so. Changing `GYMOS_MEDIA_KEY` makes every existing file undecryptable; GymOS
+detects this as a GCM authentication failure and refuses to serve the file rather than
+returning corrupt bytes. Before changing it, download what you want to keep from
+Settings → Media privacy and delete the rest.
 
 ## What is deliberately NOT configured
 
@@ -31,7 +41,10 @@ Each of these would be a credential this build does not need:
 | Google / social OAuth | Not used. Email and password only. |
 | Razorpay | Integration boundary only — see below. |
 | Apple HealthKit / Android Health Connect | Consent record and data shape only. |
-| Cloud storage (S3 etc.) | No file uploads exist. |
+| Cloud storage (S3 etc.) | Not used. Photographs and recordings are encrypted and written to the local filesystem, and served only through an authenticated handler. Nothing leaves the install. |
+| Speech recognition (Whisper, cloud ASR) | **Deliberately absent.** Nothing is transcribed, and the voice module reports only what it can genuinely measure from the audio in the browser. See [WELLNESS.md](WELLNESS.md). |
+| Image recognition / vision models | Deliberately absent. No photograph is analysed, scored or classified anywhere in the app. |
+| Shopping / retail APIs | Not used. The outfit engine works entirely offline from the wardrobe you record, and recommends nothing to buy. |
 | Email (Resend/SES/SendGrid) | No email is sent, so there is no verification, no reset and no contact form. |
 | Analytics / error tracking | None. No third-party scripts load and the app makes no external calls at runtime. |
 

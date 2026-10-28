@@ -16,22 +16,66 @@ import {
   Menu,
   X,
   ShieldCheck,
+  Sparkles,
+  Shirt,
+  Mic,
+  Droplets,
+  ClipboardCheck,
+  NotebookPen,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
 import { Badge } from '@/components/ui';
 import { ThemeToggle } from '@/components/theme';
 
-const NAV = [
-  { href: '/dashboard', label: 'Today', icon: Home, primary: true },
-  { href: '/workouts', label: 'Workouts', icon: Dumbbell, primary: true },
-  { href: '/equipment', label: 'Equipment', icon: Boxes, primary: false },
-  { href: '/exercises', label: 'Exercises', icon: BookOpen, primary: false },
-  { href: '/nutrition', label: 'Nutrition', icon: UtensilsCrossed, primary: true },
-  { href: '/progress', label: 'Progress', icon: LineChart, primary: true },
-  { href: '/calendar', label: 'Calendar', icon: CalendarDays, primary: false },
-  { href: '/fitbrain', label: 'FitBrain', icon: Brain, primary: false },
-  { href: '/settings', label: 'Settings', icon: Settings, primary: false },
+/**
+ * Navigation is grouped rather than flat because the personal-care modules would
+ * otherwise bury training behind a fourteen-item list. `primary` still drives the
+ * four-slot mobile bottom bar, which stays on training — the thing people open the
+ * app to do.
+ */
+interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  primary: boolean;
+}
+
+const NAV_GROUPS: { section: string | null; items: NavItem[] }[] = [
+  {
+    section: null,
+    items: [
+      { href: '/dashboard', label: 'Today', icon: Home, primary: true },
+      { href: '/workouts', label: 'Workouts', icon: Dumbbell, primary: true },
+      { href: '/equipment', label: 'Equipment', icon: Boxes, primary: false },
+      { href: '/exercises', label: 'Exercises', icon: BookOpen, primary: false },
+      { href: '/nutrition', label: 'Nutrition', icon: UtensilsCrossed, primary: true },
+      { href: '/progress', label: 'Progress', icon: LineChart, primary: true },
+      { href: '/calendar', label: 'Calendar', icon: CalendarDays, primary: false },
+    ],
+  },
+  {
+    section: 'Personal care',
+    items: [
+      { href: '/wellness', label: 'Wellness', icon: Sparkles, primary: false },
+      { href: '/grooming', label: 'Grooming', icon: NotebookPen, primary: false },
+      { href: '/skincare', label: 'Skincare', icon: Droplets, primary: false },
+      { href: '/wardrobe', label: 'Wardrobe', icon: Shirt, primary: false },
+      { href: '/voice', label: 'Voice', icon: Mic, primary: false },
+      { href: '/hygiene', label: 'Hygiene', icon: ClipboardCheck, primary: false },
+      { href: '/reviews', label: 'Reviews', icon: ClipboardCheck, primary: false },
+    ],
+  },
+  {
+    section: null,
+    items: [
+      { href: '/fitbrain', label: 'FitBrain', icon: Brain, primary: false },
+      { href: '/settings', label: 'Settings', icon: Settings, primary: false },
+    ],
+  },
 ];
+
+const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export function AppShell({
   user,
@@ -90,26 +134,37 @@ export function AppShell({
         </div>
         <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
           <ul className="space-y-0.5">
-            {NAV.map((item) => {
-              const Icon = item.icon;
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    aria-current={isActive(item.href) ? 'page' : undefined}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors',
-                      isActive(item.href)
-                        ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-raised)]',
-                    )}
-                  >
-                    <Icon className="h-4.5 w-4.5" aria-hidden="true" />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
+            {NAV_GROUPS.map((group, groupIndex) => (
+              <li key={group.section ?? `group-${groupIndex}`}>
+                {group.section ? (
+                  <p className="px-3 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    {group.section}
+                  </p>
+                ) : null}
+                <ul className="space-y-0.5">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <li key={item.href}>
+                        <Link
+                          href={item.href}
+                          aria-current={isActive(item.href) ? 'page' : undefined}
+                          className={cn(
+                            'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors',
+                            isActive(item.href)
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium'
+                              : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-raised)]',
+                          )}
+                        >
+                          <Icon className="h-4.5 w-4.5" aria-hidden="true" />
+                          {item.label}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
             {user.role === 'admin' ? (
               <li>
                 <Link
@@ -162,25 +217,34 @@ export function AppShell({
             className="lg:hidden border-b border-[var(--border)] bg-[var(--surface)] p-3 grid gap-0.5"
             aria-label="All sections"
           >
-            {NAV.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMenuOpen(false)}
-                  className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm',
-                    isActive(item.href)
-                      ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium'
-                      : 'hover:bg-[var(--surface-sunken)]',
-                  )}
-                >
-                  <Icon className="h-4.5 w-4.5" aria-hidden="true" />
-                  {item.label}
-                </Link>
-              );
-            })}
+            {NAV_GROUPS.map((group, groupIndex) => (
+              <div key={group.section ?? `group-${groupIndex}`} className="grid gap-0.5">
+                {group.section ? (
+                  <p className="px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    {group.section}
+                  </p>
+                ) : null}
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setMenuOpen(false)}
+                      className={cn(
+                        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm',
+                        isActive(item.href)
+                          ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium'
+                          : 'hover:bg-[var(--surface-sunken)]',
+                      )}
+                    >
+                      <Icon className="h-4.5 w-4.5" aria-hidden="true" />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            ))}
             {user.role === 'admin' ? (
               <Link
                 href="/admin/content"

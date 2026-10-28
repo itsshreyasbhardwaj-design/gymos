@@ -34,10 +34,14 @@ These are listed up front because a feature list that quietly omits them is a li
 | **Grocery price data** | No retail price data ships. Cost estimates come only from prices you record yourself. |
 | **Offline write sync** | The PWA caches pages you have visited. Logging needs a connection. |
 | **Trainer / gym partner portals** | Data model and authorization boundaries only. |
+| **Speech recognition** | No speech model ships. Recordings are **never transcribed**, and GymOS will not pretend otherwise. It reports only what it can measure from the audio — see [WELLNESS.md](WELLNESS.md). |
+| **Photo analysis of any kind** | Nothing in the photo journal is analysed. There is no appearance score, body rating or body-fat estimate, and no database column that could hold one. |
+| **Photo or voice capture for under-18 accounts** | Refused at the service layer: there is no verified parental-consent mechanism in this build. Every other personal-care feature is available. |
 
 GymOS gives general fitness information. It is **not** medical, physiotherapy or
 dietetic advice, it cannot diagnose anything, and it will never tell you to train
-through pain.
+through pain. It does not diagnose skin conditions, it does not rate how anyone looks
+or sounds, and it never shames you for a missed day.
 
 ---
 
@@ -80,7 +84,7 @@ records.
 | `npm run test:e2e` | Build, then Playwright end-to-end tests |
 | `npm run verify` | typecheck → lint → test → build |
 
-## The six systems
+## The systems
 
 | System | What it does |
 | --- | --- |
@@ -91,6 +95,9 @@ records.
 | **NutritionOS** | 79 India-first recipes with allergens derived from ingredients and applied as a hard filter on generation *and* on every swap. |
 | **FitBrain** | A guided assistant with no language model. Rule-based intent routing over your own records and the content libraries. |
 | **ProgressOS** | Charts built only from logged sets. No body-composition predictions, no comparisons, no streak-shaming. |
+| **Personal care** | Skincare and grooming routines, a digital wardrobe with an offline outfit engine, hygiene routines, and speaking practice with honestly measured metrics. |
+| **Private media** | AES-256-GCM encrypted at rest, metadata stripped on upload, served only through an authenticated ownership-checked handler, deleted for real with an auditable log. |
+| **ReviewOS** | One report across every system, for a week, fortnight or month. Built only from rows you created, with no score and no shaming. |
 
 ## Content library
 
@@ -101,6 +108,7 @@ records.
 | Ingredients | 134 |
 | Allergens | 10 |
 | Recipes | 79 (Bengali, North Indian, South Indian, everyday home cooking, selected international) |
+| Voice practice scripts | 15, all original text written for GymOS |
 
 All of it carries a review status and a source record. Everything currently reads
 `draft`.
@@ -115,6 +123,7 @@ All of it carries a review status and a source record. Everything currently read
 | [EQUIPMENT_ENGINE.md](EQUIPMENT_ENGINE.md) | Catalog, requirement groups, compatibility |
 | [NUTRITION_ENGINE.md](NUTRITION_ENGINE.md) | Recipes, allergens, meal planning, groceries |
 | [FITBRAIN.md](FITBRAIN.md) | Capabilities, data access, limitations |
+| [WELLNESS.md](WELLNESS.md) | Photo journal, skincare, style, voice, hygiene, review — and the safety and privacy constraints behind them |
 | [SECURITY.md](SECURITY.md) | Auth, authorization, sensitive data, residual risks |
 | [TESTING.md](TESTING.md) | Strategy, commands and verified results |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | What production needs that this build does not have |

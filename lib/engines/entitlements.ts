@@ -12,6 +12,10 @@ export const FEATURES = {
   ADVANCED_ANALYTICS: 'advanced_analytics',
   DATA_EXPORT: 'data_export',
   CUSTOM_EQUIPMENT: 'custom_equipment',
+  // Wellness modules
+  MEDIA_ASSETS: 'media_assets',
+  WARDROBE_ITEMS: 'wardrobe_items',
+  CARE_ROUTINES: 'care_routines',
 } as const;
 
 export type Feature = (typeof FEATURES)[keyof typeof FEATURES];
@@ -65,6 +69,17 @@ export const ENTITLEMENT_MATRIX: EntitlementRow[] = [
 
   { plan: 'free', feature: 'custom_equipment', enabled: true, limitValue: 5, note: 'Up to 5 custom items' },
   { plan: 'pro', feature: 'custom_equipment', enabled: true, limitValue: 100, note: 'Up to 100' },
+
+  // Private media is capped by storage cost, not withheld as a lever: the journal
+  // itself is free, and the data rights over it are never paywalled.
+  { plan: 'free', feature: 'media_assets', enabled: true, limitValue: 25, note: '25 private files' },
+  { plan: 'pro', feature: 'media_assets', enabled: true, limitValue: 500, note: '500 private files' },
+
+  { plan: 'free', feature: 'wardrobe_items', enabled: true, limitValue: 40, note: '40 wardrobe items' },
+  { plan: 'pro', feature: 'wardrobe_items', enabled: true, limitValue: null, note: 'Unlimited' },
+
+  { plan: 'free', feature: 'care_routines', enabled: true, limitValue: 4, note: '4 care routines' },
+  { plan: 'pro', feature: 'care_routines', enabled: true, limitValue: null, note: 'Unlimited' },
 ];
 
 const BY_KEY = new Map(ENTITLEMENT_MATRIX.map((r) => [`${r.plan}:${r.feature}`, r]));
@@ -133,6 +148,9 @@ export function humanFeature(feature: Feature): string {
     advanced_analytics: 'Advanced progress analytics',
     data_export: 'Data export',
     custom_equipment: 'Custom equipment entries',
+    media_assets: 'Private photo and voice files',
+    wardrobe_items: 'Wardrobe items',
+    care_routines: 'Grooming and hygiene routines',
   };
   return map[feature] ?? feature;
 }

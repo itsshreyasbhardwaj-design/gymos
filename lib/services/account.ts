@@ -1,5 +1,6 @@
 import 'server-only';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
+import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { db } from '@/lib/db/client';
 import {
   users,
@@ -33,21 +34,48 @@ import {
   auditEvents,
   userIngredientPrices,
   sessions as sessionRows,
+  // Wellness modules
+  privateMediaAssets,
+  mediaAccessGrants,
+  mediaDeletionEvents,
+  personalJournalEntries,
+  photoCheckins,
+  photoCheckinAssets,
+  checkinSchedules,
+  groomingRoutines,
+  groomingRoutineSteps,
+  groomingRoutineLogs,
+  skincareProducts,
+  skincareJournal,
+  patchTests,
+  groomingAppointments,
+  wardrobeItems,
+  outfitCombinations,
+  outfitPlans,
+  communicationGoals,
+  voicePracticeSessions,
+  voiceRecordings,
+  communicationFeedback,
+  hygieneRoutines,
+  hygieneTasks,
+  hygieneCheckins,
+  personalCareSupplies,
+  personalReviewReports,
+  reviewPreferences,
 } from '@/lib/db/schema';
 import { hashPassword, verifyPassword, validatePasswordStrength } from '@/lib/auth/password';
 import { newId, normalizeEmail } from '@/lib/auth/ids';
 import { NotFoundError } from './equipment';
+import { ValidationError } from './errors';
 import type { AgeBand } from '@/lib/engines/programming';
 import type { Level } from '@/lib/content/exercise-types';
+import { deleteMediaForConsent, deleteAllMedia, isDevelopmentKey } from './media';
+import { purgeAudioDerivedMetrics } from './voice';
 
-export class ValidationError extends Error {
-  readonly field?: string;
-  constructor(message: string, field?: string) {
-    super(message);
-    this.name = 'ValidationError';
-    this.field = field;
-  }
-}
+// Re-exported because every other service imports it from here. The class itself now
+// lives in './errors' so that this module can import a service without a cycle.
+export { ValidationError };
+
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -212,7 +240,9 @@ export type ConsentKind =
   | 'activity_import'
   | 'household_planning'
   | 'analytics'
-  | 'coach_sharing';
+  | 'coach_sharing'
+  | 'photo_journal'
+  | 'voice_recording';
 
 export const CONSENT_COPY: Record<ConsentKind, { title: string; body: string; minorNote?: string }> = {
   terms: { title: 'Terms of service', body: 'Required to hold an account.' },
@@ -237,7 +267,25 @@ export const CONSENT_COPY: Record<ConsentKind, { title: string; body: string; mi
     title: 'Share with a coach',
     body: 'Reserved for a future trainer feature. No trainer accounts exist in this build, so nothing can be shared.',
   },
+  photo_journal: {
+    title: 'Private photo journal',
+    body: 'Lets you store progress and skin photographs. They are encrypted on disk, their metadata is stripped on upload, and they are never given a public address. GymOS does not score your appearance, estimate body fat from a picture or diagnose a skin condition — it only keeps your own photographs for you to compare. Turning this off deletes every photograph immediately.',
+    minorNote: 'Not offered to under-18 accounts.',
+  },
+  voice_recording: {
+    title: 'Voice recordings',
+    body: 'Lets you record and play back speaking practice. Recordings are encrypted on disk and never leave your install. There is no speech recognition in this build, so nothing is transcribed and no voice is judged against any ideal. Turning this off deletes every recording immediately.',
+    minorNote: 'Not offered to under-18 accounts.',
+  },
 };
+
+/** Consents whose withdrawal must destroy the media collected under them. */
+const MEDIA_CONSENTS = ['photo_journal', 'voice_recording'] as const;
+type MediaConsentKind = (typeof MEDIA_CONSENTS)[number];
+
+function isMediaConsent(kind: ConsentKind): kind is MediaConsentKind {
+  return (MEDIA_CONSENTS as readonly string[]).includes(kind);
+}
 
 export function listConsents(userId: string) {
   return db.select().from(consents).where(eq(consents.userId, userId)).all();
@@ -256,6 +304,11 @@ export function setConsent(userId: string, kind: ConsentKind, granted: boolean):
   const profile = getProfile(userId);
   if (granted && kind === 'biometrics' && profile && profile.ageBand !== 'adult_18_plus') {
     throw new ValidationError('Biometric collection is not available for under-18 accounts.');
+  }
+  if (granted && isMediaConsent(kind) && profile && profile.ageBand !== 'adult_18_plus') {
+    throw new ValidationError(
+      'Photo and voice capture are not available for under-18 accounts. GymOS has no verified parental-consent mechanism, so it does not store photographs or recordings for them.',
+    );
   }
   const now = new Date().toISOString();
   db.insert(consents)
@@ -278,6 +331,18 @@ export function setConsent(userId: string, kind: ConsentKind, granted: boolean):
       },
     })
     .run();
+
+  // Withdrawal is destructive by design: the consent toggle and the data it covers
+  // cannot drift apart.
+  if (!granted && isMediaConsent(kind)) {
+    deleteMediaForConsent(userId, kind);
+    // Destroying a recording has to take the analysis derived from it too. Keeping the
+    // pause count and speaking ratio of audio the user just revoked would leave the
+    // measurement without the thing it measured, which is not what "withdraw" means.
+    // Duration, the script, the reflection and every self-reported value are the user's
+    // own record of practising and are deliberately left alone.
+    if (kind === 'voice_recording') purgeAudioDerivedMetrics(userId);
+  }
 }
 
 /* ------------------------------------------------------- export and deletion */
@@ -359,7 +424,170 @@ export function buildExport(userId: string): Record<string, unknown> {
     biometrics: db.select().from(biometricRecords).where(eq(biometricRecords.userId, userId)).all(),
     notifications: db.select().from(notifications).where(eq(notifications.userId, userId)).all(),
     auditEvents: db.select().from(auditEvents).where(eq(auditEvents.userId, userId)).all(),
+    ...wellnessExport(userId),
   };
+}
+
+/**
+ * The wellness half of the export.
+ *
+ * Photographs and recordings are deliberately NOT embedded here. This payload is
+ * stored as JSON in the database, and base64 media would multiply its size for no
+ * gain — the files are downloaded individually from Settings → Media privacy, which
+ * is also the only place they are ever decrypted. Everything GymOS knows *about*
+ * them is in `privateMedia`, so the export still accounts for every file.
+ */
+function wellnessExport(userId: string): Record<string, unknown> {
+  const checkinIds = db
+    .select({ id: photoCheckins.id })
+    .from(photoCheckins)
+    .where(eq(photoCheckins.userId, userId))
+    .all()
+    .map((r) => r.id);
+  const practiceIds = db
+    .select({ id: voicePracticeSessions.id })
+    .from(voicePracticeSessions)
+    .where(eq(voicePracticeSessions.userId, userId))
+    .all()
+    .map((r) => r.id);
+  const groomingRoutineIds = db
+    .select({ id: groomingRoutines.id })
+    .from(groomingRoutines)
+    .where(eq(groomingRoutines.userId, userId))
+    .all()
+    .map((r) => r.id);
+  const hygieneRoutineIds = db
+    .select({ id: hygieneRoutines.id })
+    .from(hygieneRoutines)
+    .where(eq(hygieneRoutines.userId, userId))
+    .all()
+    .map((r) => r.id);
+
+  return {
+    mediaNote:
+      'Your photographs and recordings are stored encrypted and are not embedded in this file. Download them individually from Settings -> Media privacy. Every file is listed below.',
+    privateMedia: db
+      .select()
+      .from(privateMediaAssets)
+      .where(eq(privateMediaAssets.userId, userId))
+      .all()
+      .map(({ ivHex: _iv, authTagHex: _tag, storagePath: _path, ...rest }) => rest),
+    mediaAccessGrants: db
+      .select()
+      .from(mediaAccessGrants)
+      .where(eq(mediaAccessGrants.grantedByUserId, userId))
+      .all(),
+    mediaDeletionEvents: db
+      .select()
+      .from(mediaDeletionEvents)
+      .where(eq(mediaDeletionEvents.userId, userId))
+      .all(),
+    mediaEncryption: isDevelopmentKey()
+      ? 'This install uses a locally generated development key held in the data directory.'
+      : 'This install derives its media key from GYMOS_MEDIA_KEY.',
+    journalEntries: db
+      .select()
+      .from(personalJournalEntries)
+      .where(eq(personalJournalEntries.userId, userId))
+      .all(),
+    photoCheckins: db.select().from(photoCheckins).where(eq(photoCheckins.userId, userId)).all(),
+    photoCheckinAssets: childRows(photoCheckinAssets, photoCheckinAssets.checkinId, checkinIds),
+    checkinSchedules: db
+      .select()
+      .from(checkinSchedules)
+      .where(eq(checkinSchedules.userId, userId))
+      .all(),
+    groomingRoutines: db
+      .select()
+      .from(groomingRoutines)
+      .where(eq(groomingRoutines.userId, userId))
+      .all(),
+    groomingRoutineSteps: childRows(
+      groomingRoutineSteps,
+      groomingRoutineSteps.routineId,
+      groomingRoutineIds,
+    ),
+    groomingRoutineLogs: db
+      .select()
+      .from(groomingRoutineLogs)
+      .where(eq(groomingRoutineLogs.userId, userId))
+      .all(),
+    skincareProducts: db
+      .select()
+      .from(skincareProducts)
+      .where(eq(skincareProducts.userId, userId))
+      .all(),
+    skincareJournal: db
+      .select()
+      .from(skincareJournal)
+      .where(eq(skincareJournal.userId, userId))
+      .all(),
+    patchTests: db.select().from(patchTests).where(eq(patchTests.userId, userId)).all(),
+    groomingAppointments: db
+      .select()
+      .from(groomingAppointments)
+      .where(eq(groomingAppointments.userId, userId))
+      .all(),
+    wardrobeItems: db.select().from(wardrobeItems).where(eq(wardrobeItems.userId, userId)).all(),
+    outfitCombinations: db
+      .select()
+      .from(outfitCombinations)
+      .where(eq(outfitCombinations.userId, userId))
+      .all(),
+    outfitPlans: db.select().from(outfitPlans).where(eq(outfitPlans.userId, userId)).all(),
+    communicationGoals: db
+      .select()
+      .from(communicationGoals)
+      .where(eq(communicationGoals.userId, userId))
+      .all(),
+    voicePracticeSessions: db
+      .select()
+      .from(voicePracticeSessions)
+      .where(eq(voicePracticeSessions.userId, userId))
+      .all(),
+    voiceRecordings: childRows(voiceRecordings, voiceRecordings.sessionId, practiceIds),
+    communicationFeedback: childRows(
+      communicationFeedback,
+      communicationFeedback.sessionId,
+      practiceIds,
+    ),
+    hygieneRoutines: db
+      .select()
+      .from(hygieneRoutines)
+      .where(eq(hygieneRoutines.userId, userId))
+      .all(),
+    hygieneTasks: childRows(hygieneTasks, hygieneTasks.routineId, hygieneRoutineIds),
+    hygieneCheckins: db
+      .select()
+      .from(hygieneCheckins)
+      .where(eq(hygieneCheckins.userId, userId))
+      .all(),
+    personalCareSupplies: db
+      .select()
+      .from(personalCareSupplies)
+      .where(eq(personalCareSupplies.userId, userId))
+      .all(),
+    personalReviewReports: db
+      .select()
+      .from(personalReviewReports)
+      .where(eq(personalReviewReports.userId, userId))
+      .all(),
+    reviewPreferences: db
+      .select()
+      .from(reviewPreferences)
+      .where(eq(reviewPreferences.userId, userId))
+      .all(),
+  };
+}
+
+/** Child rows whose only link to a user is their parent id. */
+function childRows<T extends SQLiteTable, C extends SQLiteColumn>(
+  table: T,
+  column: C,
+  parentIds: string[],
+) {
+  if (parentIds.length === 0) return [];
+  return db.select().from(table).where(inArray(column, parentIds)).all();
 }
 
 export function recordExport(userId: string): string {
@@ -377,6 +605,11 @@ export function recordExport(userId: string): string {
  * explicitly so nothing is orphaned if cascade behaviour ever changes.
  */
 export function deleteAccount(userId: string): void {
+  // Encrypted media lives on disk, not in the database, so the files are removed
+  // first and in their own transaction. Deleting a file we are about to forget is
+  // safe; forgetting a file we failed to delete would not be.
+  deleteAllMedia(userId, 'account_deleted');
+
   db.transaction((tx) => {
     const sessionIds = tx
       .select({ id: workoutSessions.id })
@@ -440,9 +673,52 @@ export function deleteAccount(userId: string): void {
     tx.delete(groceryLists).where(eq(groceryLists.userId, userId)).run();
     tx.delete(gymProfiles).where(eq(gymProfiles.userId, userId)).run();
     tx.delete(sessionRows).where(eq(sessionRows.userId, userId)).run();
+
+    // Wellness child rows reached only through a parent id.
+    deleteChildren(tx, photoCheckins, photoCheckins.id, photoCheckinAssets, photoCheckinAssets.checkinId, userId, photoCheckins.userId);
+    deleteChildren(tx, groomingRoutines, groomingRoutines.id, groomingRoutineSteps, groomingRoutineSteps.routineId, userId, groomingRoutines.userId);
+    deleteChildren(tx, hygieneRoutines, hygieneRoutines.id, hygieneTasks, hygieneTasks.routineId, userId, hygieneRoutines.userId);
+    deleteChildren(tx, voicePracticeSessions, voicePracticeSessions.id, voiceRecordings, voiceRecordings.sessionId, userId, voicePracticeSessions.userId);
+    deleteChildren(tx, voicePracticeSessions, voicePracticeSessions.id, communicationFeedback, communicationFeedback.sessionId, userId, voicePracticeSessions.userId);
+
+    tx.delete(photoCheckins).where(eq(photoCheckins.userId, userId)).run();
+    tx.delete(voicePracticeSessions).where(eq(voicePracticeSessions.userId, userId)).run();
+    tx.delete(outfitPlans).where(eq(outfitPlans.userId, userId)).run();
+    tx.delete(outfitCombinations).where(eq(outfitCombinations.userId, userId)).run();
+    tx.delete(patchTests).where(eq(patchTests.userId, userId)).run();
+    tx.delete(groomingRoutineLogs).where(eq(groomingRoutineLogs.userId, userId)).run();
+    tx.delete(groomingRoutines).where(eq(groomingRoutines.userId, userId)).run();
+    tx.delete(hygieneCheckins).where(eq(hygieneCheckins.userId, userId)).run();
+    tx.delete(hygieneRoutines).where(eq(hygieneRoutines.userId, userId)).run();
+    tx.delete(skincareProducts).where(eq(skincareProducts.userId, userId)).run();
+    tx.delete(mediaAccessGrants).where(eq(mediaAccessGrants.grantedToUserId, userId)).run();
+
     // The remaining tables cascade from users; deleting the row finishes the job.
     tx.delete(users).where(eq(users.id, userId)).run();
   });
+}
+
+/**
+ * Deletes child rows whose parents belong to this user, then leaves the parents to
+ * the caller. Written as a helper because five of the wellness tables share the shape.
+ */
+function deleteChildren(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  parent: SQLiteTable,
+  parentId: SQLiteColumn,
+  child: SQLiteTable,
+  childParentColumn: SQLiteColumn,
+  userId: string,
+  parentUserColumn: SQLiteColumn,
+): void {
+  const ids = tx
+    .select({ id: parentId })
+    .from(parent)
+    .where(eq(parentUserColumn, userId))
+    .all()
+    .map((r) => r.id as string);
+  if (ids.length === 0) return;
+  tx.delete(child).where(inArray(childParentColumn, ids)).run();
 }
 
 export function listNotifications(userId: string, limit = 20) {

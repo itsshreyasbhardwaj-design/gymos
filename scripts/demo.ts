@@ -23,6 +23,7 @@ import { db } from '../lib/db/client';
 import { users } from '../lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { normalizeEmail } from '../lib/auth/ids';
+import { seedWellness } from './demo-wellness';
 
 const DEMO_EMAIL = 'demo@gymos.local';
 const DEMO_PASSWORD = 'sample-data-tiger-47';
@@ -178,11 +179,15 @@ async function main() {
   const listId = generateGroceryList(userId, 'pro', { mealPlanId });
   console.log(`meal plan ${mealPlanId} and grocery list ${listId} created`);
 
+  seedWellness(userId, today);
+
   console.log('\n--- demo account ---');
   console.log(`email:    ${DEMO_EMAIL}`);
   console.log(`password: ${DEMO_PASSWORD}`);
   console.log('plan:     Pro (development grant, no payment involved)');
   console.log('All data in this account is fictional sample data.');
+  console.log('Photo and voice consents are OFF, so no media is stored. Turn them on in');
+  console.log('Settings → Media privacy if you want to try the journal or the recorder.');
 }
 
 /** Internally consistent fictional loads, in grams, that progress a little weekly. */

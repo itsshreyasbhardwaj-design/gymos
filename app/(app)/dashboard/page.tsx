@@ -21,6 +21,7 @@ import { getActivePlan } from '@/lib/services/plans';
 import { getActiveMealPlan } from '@/lib/services/nutrition';
 import { activeEquipmentSet, listGymProfiles } from '@/lib/services/equipment';
 import { progressOverview } from '@/lib/services/progress';
+import { wellnessSummary } from '@/lib/services/review';
 import { mondayOf, addDays } from '@/lib/engines/nutrition';
 import { DAY_SHORT } from '@/lib/engines/workout-templates';
 import { describeConsistency } from '@/lib/engines/progress';
@@ -56,6 +57,7 @@ export default async function DashboardPage({
 
   const today = new Date().toISOString().slice(0, 10);
   const monday = mondayOf(today);
+  const wellness = wellnessSummary(user.id, today);
   const current = todaySession(user.id, today);
   const upcoming = current ? null : nextSession(user.id);
   const missed = missedSessions(user.id);
@@ -316,6 +318,86 @@ export default async function DashboardPage({
               </p>
               <LinkButton href="/nutrition/meal-plan" variant="secondary" size="sm">
                 Plan meals
+              </LinkButton>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* ------------------------------------------------------ personal care */}
+      <Card>
+        <CardHeader
+          title="Personal care"
+          subtitle={
+            wellness.anythingSetUp
+              ? 'What you have set up, and anything with a date that has passed.'
+              : 'Optional. Nothing here is scored, and nothing reminds you unless you ask it to.'
+          }
+          action={<Sparkles className="h-5 w-5 text-[var(--accent-2)]" aria-hidden="true" />}
+        />
+        <div className="px-5 pb-5 space-y-4">
+          {wellness.anythingSetUp ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Stat
+                  label="Routines"
+                  value={String(wellness.groomingRoutines + wellness.hygieneRoutines)}
+                  hint="Grooming and hygiene"
+                />
+                <Stat label="Wardrobe items" value={String(wellness.wardrobeItems)} />
+                <Stat
+                  label="Practice this week"
+                  value={String(wellness.practiceThisWeek)}
+                  hint="Speaking sessions"
+                />
+              </div>
+
+              {wellness.expiredProducts > 0 ||
+              wellness.lowSupplies > 0 ||
+              wellness.patchTestsOpen > 0 ? (
+                <BulletList
+                  items={[
+                    ...(wellness.expiredProducts > 0
+                      ? [
+                          `${wellness.expiredProducts} skincare product${wellness.expiredProducts === 1 ? '' : 's'} past the date you recorded.`,
+                        ]
+                      : []),
+                    ...(wellness.lowSupplies > 0
+                      ? [
+                          `${wellness.lowSupplies} suppl${wellness.lowSupplies === 1 ? 'y' : 'ies'} marked as running low.`,
+                        ]
+                      : []),
+                    ...(wellness.patchTestsOpen > 0
+                      ? [
+                          `${wellness.patchTestsOpen} patch test${wellness.patchTestsOpen === 1 ? '' : 's'} still inside its observation window.`,
+                        ]
+                      : []),
+                  ]}
+                />
+              ) : null}
+
+              <div className="flex flex-wrap gap-2">
+                <LinkButton href="/wellness" variant="secondary" size="sm">
+                  Open wellness
+                </LinkButton>
+                <LinkButton href="/reviews" variant="ghost" size="sm">
+                  See your review
+                </LinkButton>
+                {wellness.wardrobeItems > 0 ? (
+                  <LinkButton href="/wardrobe/planner" variant="ghost" size="sm">
+                    {wellness.outfitPlannedToday ? "Today's outfit" : 'Plan an outfit'}
+                  </LinkButton>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-sm text-[var(--text-muted)] flex-1 min-w-48">
+                Routines, skincare, wardrobe and speaking practice live here if you want them.
+                Training and food work exactly the same whether you use any of it or not.
+              </p>
+              <LinkButton href="/wellness" variant="secondary" size="sm">
+                Take a look
               </LinkButton>
             </div>
           )}

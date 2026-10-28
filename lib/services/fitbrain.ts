@@ -1,7 +1,20 @@
 import 'server-only';
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { db } from '@/lib/db/client';
-import { exerciseLogs, workoutSessions, userProfiles, preferences } from '@/lib/db/schema';
+import {
+  exerciseLogs,
+  workoutSessions,
+  userProfiles,
+  preferences,
+  groomingRoutines,
+  hygieneRoutines,
+  skincareProducts,
+  personalCareSupplies,
+  outfitPlans,
+  wardrobeItems,
+  voicePracticeSessions,
+  checkinSchedules,
+} from '@/lib/db/schema';
 import { detectIntent, FITBRAIN_CAPABILITIES, type IntentId } from '@/lib/engines/fitbrain-intents';
 import { EXERCISE_CATALOG, EXERCISE_BY_ID } from '@/lib/content/exercises';
 import { MUSCLE_LABELS, MOVEMENT_PATTERN_LABELS } from '@/lib/content/exercise-types';
@@ -15,6 +28,8 @@ import { activeEquipmentSet } from './equipment';
 import { getActivePlan, getPreference, setPreference, loadPlanningProfile, plannedExercisesToGenerated } from './plans';
 import { listSessions, missedSessions, nextSession } from './sessions';
 import { getNutritionPrefs, getActiveMealPlan } from './nutrition';
+import { previewReview, getReviewPreferences } from './review';
+import { mediaUsage, listGrants, isDevelopmentKey } from './media';
 import { addDays } from '@/lib/engines/nutrition';
 import type { Plan } from '@/lib/engines/entitlements';
 import { checkEntitlement } from '@/lib/engines/entitlements';
@@ -50,7 +65,15 @@ export function activeProvider(): LanguageModelProvider {
 }
 
 export interface FitBrainSource {
-  kind: 'exercise' | 'recipe' | 'plan' | 'session' | 'preference' | 'feature' | 'equipment';
+  kind: | 'exercise'
+    | 'recipe'
+    | 'plan'
+    | 'session'
+    | 'preference'
+    | 'feature'
+    | 'equipment'
+    // Wellness answers cite the user's own rows rather than the content library.
+    | 'user_record';
   label: string;
   href?: string;
 }
@@ -120,6 +143,22 @@ export function ask({ userId, plan, query }: AskOptions): FitBrainAnswer {
       return setPreferenceAnswer(userId, query, match.confidence);
     case 'app_help':
       return appHelp(query, match.confidence);
+    case 'appearance_redirect':
+      return appearanceRedirect(match.confidence);
+    case 'skin_concern_redirect':
+      return skinConcernRedirect(match.confidence);
+    case 'voice_judgement_redirect':
+      return voiceJudgementRedirect(match.confidence);
+    case 'wellness_overview':
+      return wellnessOverview(userId, match.confidence);
+    case 'routine_due':
+      return routineDue(userId, match.confidence);
+    case 'outfit_question':
+      return outfitAnswer(userId, match.confidence);
+    case 'voice_practice':
+      return voicePracticeAnswer(userId, match.confidence);
+    case 'media_privacy':
+      return mediaPrivacyAnswer(userId, match.confidence);
     default:
       return unknownAnswer();
   }
@@ -164,6 +203,328 @@ function safetyRedirect(confidence: number): FitBrainAnswer {
       disclaimer: MEDICAL_DISCLAIMER,
     },
   );
+}
+
+/* ---------------------------------------------------- wellness: refusals */
+
+/**
+ * The appearance refusal.
+ *
+ * This is a design decision, not a missing feature: GymOS will not score how someone
+ * looks, and saying so plainly is more useful than a vague deflection. It then offers
+ * the thing it can actually do — keep the user's own photographs for them.
+ */
+function appearanceRedirect(confidence: number): FitBrainAnswer {
+  return answer(
+    'appearance_redirect',
+    confidence,
+    'GymOS does not rate how anyone looks, and it is not going to start.',
+    {
+      bullets: [
+        'There is no attractiveness score, body rating or body-fat estimate anywhere in this app, and no database column that could hold one.',
+        'Nothing in your photo journal is analysed. GymOS stores your photographs, encrypted, so that you can look back at them yourself.',
+        'A number from an app would not tell you anything true about your body, and comparing yourself to an idealised one is not something GymOS will help with.',
+        'What it can do: keep a private, dated photo journal, track measurements you choose to record yourself, and show your training and food history.',
+      ],
+      actions: [
+        { kind: 'navigate', label: 'Open your private journal', href: '/wellness/journal' },
+        { kind: 'navigate', label: 'See what is stored and delete it', href: '/settings/media-privacy' },
+      ],
+    },
+  );
+}
+
+function skinConcernRedirect(confidence: number): FitBrainAnswer {
+  return answer(
+    'skin_concern_redirect',
+    confidence,
+    'GymOS cannot tell you what is happening with your skin.',
+    {
+      bullets: [
+        'It does not diagnose skin conditions, from a photograph or a description, and it does not recommend prescription treatment.',
+        'A photograph is not a medical measurement, and GymOS never presents one as though it were.',
+        'For anything persistent, painful, spreading or changing, please see a doctor or dermatologist.',
+        'What GymOS can do: keep a dated record of products you used and how your skin felt, which is genuinely useful to show a professional.',
+      ],
+      actions: [
+        { kind: 'navigate', label: 'Open your skincare journal', href: '/skincare' },
+        { kind: 'navigate', label: 'Record a patch test', href: '/skincare' },
+      ],
+      disclaimer: MEDICAL_DISCLAIMER,
+    },
+  );
+}
+
+function voiceJudgementRedirect(confidence: number): FitBrainAnswer {
+  return answer(
+    'voice_judgement_redirect',
+    confidence,
+    'GymOS does not judge voices, and it cannot tell you what you said.',
+    {
+      bullets: [
+        'There is no speech recognition in this build, so nothing you record is transcribed. GymOS will not pretend otherwise or guess at the words.',
+        'It also does not rate a voice as good or bad, or compare pitch against any ideal.',
+        'What it does measure, from the recording itself: how long you spoke, how many pauses you took, the longest one, and your speaking-to-silence ratio.',
+        'Words per minute is measured only when you read one of the practice scripts, because then the word count is actually known.',
+      ],
+      actions: [{ kind: 'navigate', label: 'Open speaking practice', href: '/voice/practice' }],
+    },
+  );
+}
+
+/* -------------------------------------------------- wellness: capabilities */
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function wellnessOverview(userId: string, confidence: number): FitBrainAnswer {
+  const prefs = getReviewPreferences(userId);
+  const cadence = prefs.cadence === 'manual' ? 'weekly' : prefs.cadence;
+  const report = previewReview(userId, cadence, todayIso());
+  const active = report.sections.filter((s) => !s.emptyNote);
+
+  if (active.length === 0) {
+    return answer('wellness_overview', confidence, report.headline, {
+      bullets: [
+        'There is nothing recorded in the current window, so there is nothing to summarise. GymOS is not going to pad that out.',
+      ],
+      actions: [{ kind: 'navigate', label: 'Open your review', href: '/reviews' }],
+    });
+  }
+
+  return answer('wellness_overview', confidence, report.headline, {
+    bullets: [
+      ...active.flatMap((s) => s.observations.slice(0, 1).map((o) => `${s.title}: ${o}`)),
+      ...report.nextActions,
+    ],
+    sources: [{ kind: 'user_record', label: `Your records, ${report.window.start} to ${report.window.end}` }],
+    actions: [{ kind: 'navigate', label: 'Open the full review', href: '/reviews' }],
+  });
+}
+
+function routineDue(userId: string, confidence: number): FitBrainAnswer {
+  const today = todayIso();
+  const nowIso = new Date().toISOString();
+
+  const grooming = db
+    .select({ name: groomingRoutines.name, slot: groomingRoutines.slot })
+    .from(groomingRoutines)
+    .where(and(eq(groomingRoutines.userId, userId), eq(groomingRoutines.active, true)))
+    .all();
+  const hygiene = db
+    .select({ name: hygieneRoutines.name, cadence: hygieneRoutines.cadence })
+    .from(hygieneRoutines)
+    .where(and(eq(hygieneRoutines.userId, userId), eq(hygieneRoutines.active, true)))
+    .all();
+  const expired = db
+    .select({ c: count() })
+    .from(skincareProducts)
+    .where(
+      and(
+        eq(skincareProducts.userId, userId),
+        eq(skincareProducts.archived, false),
+        isNotNull(skincareProducts.expiresAt),
+        lt(skincareProducts.expiresAt, nowIso),
+      ),
+    )
+    .all();
+  const low = db
+    .select({ c: count() })
+    .from(personalCareSupplies)
+    .where(and(eq(personalCareSupplies.userId, userId), eq(personalCareSupplies.runningLow, true)))
+    .all();
+
+  const expiredCount = expired[0]?.c ?? 0;
+  const lowCount = low[0]?.c ?? 0;
+
+  if (grooming.length === 0 && hygiene.length === 0) {
+    return answer(
+      'routine_due',
+      confidence,
+      'You have not set up any grooming or hygiene routines yet, so nothing is due.',
+      {
+        bullets: [
+          'A routine is just a named list of steps and the days you want it on. GymOS reminds you if you ask it to and stays quiet if you do not.',
+          'Nothing here is scored, and skipping a day is not recorded as a failure.',
+        ],
+        actions: [
+          { kind: 'navigate', label: 'Set up a grooming routine', href: '/grooming/routines' },
+          { kind: 'navigate', label: 'Set up a hygiene routine', href: '/hygiene' },
+        ],
+      },
+    );
+  }
+
+  const bullets: string[] = [];
+  if (grooming.length > 0) {
+    bullets.push(
+      `Grooming: ${grooming.map((r) => `${r.name} (${r.slot})`).join(', ')}. The Grooming page shows which of these falls on ${today}.`,
+    );
+  }
+  if (hygiene.length > 0) {
+    bullets.push(
+      `Routines: ${hygiene.map((r) => `${r.name} (${r.cadence})`).join(', ')}. The Hygiene page works out what is due from your cadence and last check-in.`,
+    );
+  }
+  if (expiredCount > 0) {
+    bullets.push(`${expiredCount} skincare product${expiredCount === 1 ? '' : 's'} are past the date you recorded.`);
+  }
+  if (lowCount > 0) {
+    bullets.push(`${lowCount} suppl${lowCount === 1 ? 'y is' : 'ies are'} marked as running low.`);
+  }
+
+  return answer('routine_due', confidence, 'Here is what you have set up.', {
+    bullets,
+    sources: [{ kind: 'user_record', label: 'Your own routines and products' }],
+    actions: [
+      { kind: 'navigate', label: 'Open Grooming', href: '/grooming' },
+      { kind: 'navigate', label: 'Open Hygiene', href: '/hygiene' },
+    ],
+  });
+}
+
+function outfitAnswer(userId: string, confidence: number): FitBrainAnswer {
+  const today = todayIso();
+  const planned = db
+    .select({ occasion: outfitPlans.occasion, status: outfitPlans.status, note: outfitPlans.note })
+    .from(outfitPlans)
+    .where(and(eq(outfitPlans.userId, userId), eq(outfitPlans.date, today)))
+    .all();
+  const items = db
+    .select({ c: count() })
+    .from(wardrobeItems)
+    .where(and(eq(wardrobeItems.userId, userId), eq(wardrobeItems.archived, false)))
+    .all();
+  const itemCount = items[0]?.c ?? 0;
+
+  if (itemCount === 0) {
+    return answer(
+      'outfit_question',
+      confidence,
+      'Your wardrobe is empty, so there is nothing for GymOS to suggest from.',
+      {
+        bullets: [
+          'Add a few items — colour, category, how formal, how warm — and the planner can put combinations together.',
+          'Suggestions are based on colour harmony, formality and the weather only. GymOS does not comment on your body or suggest hiding anything.',
+        ],
+        actions: [{ kind: 'navigate', label: 'Add wardrobe items', href: '/wardrobe' }],
+      },
+    );
+  }
+
+  if (planned.length > 0) {
+    return answer('outfit_question', confidence, `You already have an outfit planned for today.`, {
+      bullets: planned.map(
+        (p) => `${p.occasion || 'No occasion set'} — ${p.status}${p.note ? `. ${p.note}` : ''}`,
+      ),
+      sources: [{ kind: 'user_record', label: 'Your outfit planner' }],
+      actions: [{ kind: 'navigate', label: 'Open the planner', href: '/wardrobe/planner' }],
+    });
+  }
+
+  return answer(
+    'outfit_question',
+    confidence,
+    `Nothing is planned for today, and you have ${itemCount} item${itemCount === 1 ? '' : 's'} to work with.`,
+    {
+      bullets: [
+        'The outfit builder scores combinations on colour harmony, how formal the occasion is, and how warm it needs to be, and tells you why each one works.',
+        'It works entirely offline — there are no shopping integrations and nothing is recommended for you to buy.',
+      ],
+      sources: [{ kind: 'user_record', label: 'Your wardrobe' }],
+      actions: [{ kind: 'navigate', label: 'Build an outfit', href: '/wardrobe/outfits' }],
+    },
+  );
+}
+
+function voicePracticeAnswer(userId: string, confidence: number): FitBrainAnswer {
+  const recent = db
+    .select({
+      date: voicePracticeSessions.date,
+      wpm: voicePracticeSessions.wordsPerMinute,
+      scriptWordCount: voicePracticeSessions.scriptWordCount,
+      durationSeconds: voicePracticeSessions.durationSeconds,
+    })
+    .from(voicePracticeSessions)
+    .where(eq(voicePracticeSessions.userId, userId))
+    .orderBy(desc(voicePracticeSessions.date))
+    .limit(5)
+    .all();
+
+  const measured = recent.filter((r) => r.wpm !== null && (r.scriptWordCount ?? 0) > 0);
+  const bullets: string[] = [
+    'There is no speech model in this build, so nothing is transcribed and no voice is judged.',
+    'Measured from the audio: duration, pause count, longest pause and speaking ratio. Words per minute only when you read a script, because that is the only time the word count is known.',
+    'Filler words are counted by you tapping during playback, and are labelled as your own count, not a measurement.',
+  ];
+
+  if (recent.length === 0) {
+    return answer('voice_practice', confidence, 'You have not recorded any practice yet.', {
+      bullets: [
+        'Pick a script, read it, and GymOS will measure what it honestly can.',
+        ...bullets,
+        'You can also practise with just the script and a timer, without recording anything at all.',
+      ],
+      actions: [{ kind: 'navigate', label: 'Start practising', href: '/voice/practice' }],
+    });
+  }
+
+  const paceLine =
+    measured.length > 0
+      ? `Your last scripted session measured ${measured[0]?.wpm} words a minute.`
+      : 'None of your recent sessions used a script, so there is no pace figure for them.';
+
+  return answer(
+    'voice_practice',
+    confidence,
+    `You have ${recent.length} recent practice session${recent.length === 1 ? '' : 's'}. ${paceLine}`,
+    {
+      bullets,
+      sources: [{ kind: 'user_record', label: 'Your practice sessions' }],
+      actions: [
+        { kind: 'navigate', label: 'Practise again', href: '/voice/practice' },
+        { kind: 'navigate', label: 'See your history', href: '/voice/history' },
+      ],
+    },
+  );
+}
+
+function mediaPrivacyAnswer(userId: string, confidence: number): FitBrainAnswer {
+  const usage = mediaUsage(userId);
+  const grants = listGrants(userId).filter((g) => !g.revokedAt);
+  const schedule = db
+    .select({ cadence: checkinSchedules.cadence })
+    .from(checkinSchedules)
+    .where(eq(checkinSchedules.userId, userId))
+    .get();
+
+  const bullets = [
+    `You have ${usage.count} private file${usage.count === 1 ? '' : 's'} stored, ${(usage.bytes / 1024 / 1024).toFixed(1)} MB in total.`,
+    'They are encrypted with AES-256-GCM on disk and are only ever served through an authenticated request that checks you own the file. There is no public address for any of them.',
+    'Image metadata, including GPS coordinates, is removed before the file is written.',
+    grants.length === 0
+      ? 'Nothing is shared with anyone. You have no active share links.'
+      : `${grants.length} active share${grants.length === 1 ? '' : 's'}, which you can revoke immediately.`,
+    `Photo check-in reminders are currently ${schedule?.cadence ?? 'off'}.`,
+    'Turning off a media permission deletes everything collected under it, straight away, and records the deletion so you can verify it.',
+    'Nothing is used for advertising, and nothing is used to train any model.',
+  ];
+
+  if (isDevelopmentKey()) {
+    bullets.push(
+      'This install is using a locally generated development key held in its data directory, not a key you supplied. That is fine for your own machine, and worth changing before anyone else runs it.',
+    );
+  }
+
+  return answer('media_privacy', confidence, 'Here is exactly what GymOS holds and who can see it.', {
+    bullets,
+    sources: [{ kind: 'user_record', label: 'Your media store' }],
+    actions: [
+      { kind: 'navigate', label: 'Open media privacy', href: '/settings/media-privacy' },
+      { kind: 'navigate', label: 'Export everything', href: '/settings/privacy' },
+    ],
+  });
 }
 
 function explainPlan(userId: string, confidence: number): FitBrainAnswer {

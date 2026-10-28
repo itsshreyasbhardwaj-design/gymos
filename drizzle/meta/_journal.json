@@ -15,6 +15,13 @@
       "when": 1792609673459,
       "tag": "0001_chubby_swordsman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793120152903,
+      "tag": "0002_robust_otto_octavius",
+      "breakpoints": true
     }
   ]
 }

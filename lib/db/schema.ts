@@ -158,6 +158,10 @@ export const CONSENT_KINDS = [
   'household_planning',
   'analytics',
   'coach_sharing',
+  // Wellness modules. Each gates one kind of sensitive media and is independently
+  // revocable; withdrawing one deletes the media collected under it.
+  'photo_journal',
+  'voice_recording',
 ] as const;
 
 export const consents = sqliteTable(
@@ -1184,4 +1188,625 @@ export const groceryItemsRelations = relations(groceryItems, ({ one }) => ({
     fields: [groceryItems.ingredientId],
     references: [ingredients.id],
   }),
+}));
+
+/* ==========================================================================
+ * PERSONAL WELLNESS MODULES
+ *
+ * Photo journal, grooming/skincare, wardrobe, voice practice, hygiene and the
+ * unified personal review.
+ *
+ * Two rules shape every table below:
+ *   1. Private media never becomes a public URL. Bytes live encrypted on disk and
+ *      are only ever served through an authenticated, ownership-checked handler.
+ *   2. Nothing in this schema can store an appearance score, an attractiveness
+ *      rating or a body-composition estimate, because no such column exists and
+ *      none may be added. Observations are either MEASURED or SELF_REPORTED, and
+ *      every row that holds one says which.
+ * ========================================================================== */
+
+export const MEDIA_KINDS = ['photo', 'audio'] as const;
+
+/**
+ * Encrypted media metadata. The bytes themselves live outside the database at
+ * `storagePath`, sealed with AES-256-GCM; `ivHex` and `authTagHex` are required to
+ * open them, so a stolen database file alone yields nothing readable.
+ */
+export const privateMediaAssets = sqliteTable(
+  'private_media_assets',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: MEDIA_KINDS }).notNull(),
+    mimeType: text('mime_type').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    /** Relative to the media root. Never exposed to a client. */
+    storagePath: text('storage_path').notNull(),
+    ivHex: text('iv_hex').notNull(),
+    authTagHex: text('auth_tag_hex').notNull(),
+    /** Of the plaintext, so a restored file can be checked against its record. */
+    sha256: text('sha256').notNull(),
+    originalFilename: text('original_filename'),
+    /** EXIF/location and similar metadata removed before encryption. */
+    metadataStripped: integer('metadata_stripped', { mode: 'boolean' }).notNull().default(true),
+    durationSeconds: integer('duration_seconds'),
+    createdAt: text('created_at').notNull().default(now),
+    deletedAt: text('deleted_at'),
+  },
+  (t) => [index('private_media_user_idx').on(t.userId, t.createdAt)],
+);
+
+/**
+ * Explicit, revocable sharing. Absence of a grant is the default: media is private
+ * until the owner deliberately shares it, and nothing here grants access to anyone
+ * by implication.
+ */
+export const mediaAccessGrants = sqliteTable(
+  'media_access_grants',
+  {
+    id: text('id').primaryKey(),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => privateMediaAssets.id, { onDelete: 'cascade' }),
+    grantedByUserId: text('granted_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    grantedToUserId: text('granted_to_user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
+    scope: text('scope', { enum: ['view'] })
+      .notNull()
+      .default('view'),
+    reason: text('reason').notNull().default(''),
+    expiresAt: text('expires_at'),
+    revokedAt: text('revoked_at'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('media_grants_asset_idx').on(t.assetId)],
+);
+
+/** Deletion is an auditable event, so "I deleted it" can be checked rather than trusted. */
+export const mediaDeletionEvents = sqliteTable(
+  'media_deletion_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    assetId: text('asset_id').notNull(),
+    reason: text('reason', {
+      enum: ['user_request', 'consent_withdrawn', 'account_deleted', 'retention'],
+    }).notNull(),
+    bytesFreed: integer('bytes_freed').notNull().default(0),
+    fileRemoved: integer('file_removed', { mode: 'boolean' }).notNull().default(false),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('media_deletion_user_idx').on(t.userId, t.createdAt)],
+);
+
+/* ------------------------------------------------------- photo journal */
+
+export const personalJournalEntries = sqliteTable(
+  'personal_journal_entries',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    category: text('category').notNull().default('general'),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull().default(''),
+    tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [index('journal_entries_user_idx').on(t.userId, t.date)],
+);
+
+export const photoCheckins = sqliteTable(
+  'photo_checkins',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    /** The user's own words. GymOS adds no assessment of its own. */
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('photo_checkins_user_idx').on(t.userId, t.date)],
+);
+
+export const PHOTO_VIEWS = ['front', 'side', 'back', 'other', 'skin'] as const;
+
+export const photoCheckinAssets = sqliteTable(
+  'photo_checkin_assets',
+  {
+    id: text('id').primaryKey(),
+    checkinId: text('checkin_id')
+      .notNull()
+      .references(() => photoCheckins.id, { onDelete: 'cascade' }),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => privateMediaAssets.id, { onDelete: 'cascade' }),
+    view: text('view', { enum: PHOTO_VIEWS }).notNull().default('other'),
+    caption: text('caption').notNull().default(''),
+  },
+  (t) => [uniqueIndex('photo_checkin_assets_uq').on(t.checkinId, t.assetId)],
+);
+
+export const CHECKIN_CADENCES = ['off', 'weekly', 'fortnightly', 'monthly', 'custom'] as const;
+
+export const checkinSchedules = sqliteTable('checkin_schedules', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  /** Defaults to 'off'. Reminders are opt-in, never opt-out. */
+  cadence: text('cadence', { enum: CHECKIN_CADENCES }).notNull().default('off'),
+  customDays: integer('custom_days'),
+  reminderTime: text('reminder_time'),
+  lastPromptedAt: text('last_prompted_at'),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/* --------------------------------------------------- grooming and skincare */
+
+export const ROUTINE_SLOTS = ['morning', 'evening', 'weekly', 'custom'] as const;
+
+export const groomingRoutines = sqliteTable(
+  'grooming_routines',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    slot: text('slot', { enum: ROUTINE_SLOTS }).notNull().default('morning'),
+    daysOfWeek: text('days_of_week', { mode: 'json' }).$type<number[]>().notNull().default([]),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('grooming_routines_user_idx').on(t.userId)],
+);
+
+export const groomingRoutineSteps = sqliteTable(
+  'grooming_routine_steps',
+  {
+    id: text('id').primaryKey(),
+    routineId: text('routine_id')
+      .notNull()
+      .references(() => groomingRoutines.id, { onDelete: 'cascade' }),
+    orderIndex: integer('order_index').notNull(),
+    label: text('label').notNull(),
+    productId: text('product_id').references(() => skincareProducts.id, { onDelete: 'set null' }),
+    notes: text('notes').notNull().default(''),
+  },
+  (t) => [index('grooming_steps_routine_idx').on(t.routineId, t.orderIndex)],
+);
+
+export const groomingRoutineLogs = sqliteTable(
+  'grooming_routine_logs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    routineId: text('routine_id')
+      .notNull()
+      .references(() => groomingRoutines.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    completedStepIds: text('completed_step_ids', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('grooming_logs_uq').on(t.routineId, t.date)],
+);
+
+export const skincareProducts = sqliteTable(
+  'skincare_products',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    brand: text('brand').notNull().default(''),
+    /** A shelf category, not a clinical classification. */
+    category: text('category').notNull().default('other'),
+    /** Ingredients the USER typed in, used only for duplicate detection. */
+    keyIngredients: text('key_ingredients', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    openedAt: text('opened_at'),
+    expiresAt: text('expires_at'),
+    /** Period-after-opening in months, as printed on the packaging. */
+    paoMonths: integer('pao_months'),
+    pricePaise: integer('price_paise'),
+    runningLow: integer('running_low', { mode: 'boolean' }).notNull().default(false),
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('skincare_products_user_idx').on(t.userId, t.archived)],
+);
+
+export const skincareJournal = sqliteTable(
+  'skincare_journal',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    /** The user's own 1-5 comfort rating. Not a skin-quality score and never computed. */
+    comfort: integer('comfort'),
+    /** Free-text concerns the user chose to record. GymOS never infers these. */
+    concerns: text('concerns', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    productIdsUsed: text('product_ids_used', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('skincare_journal_uq').on(t.userId, t.date)],
+);
+
+export const patchTests = sqliteTable(
+  'patch_tests',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    productId: text('product_id')
+      .notNull()
+      .references(() => skincareProducts.id, { onDelete: 'cascade' }),
+    startedAt: text('started_at').notNull(),
+    checkAt: text('check_at').notNull(),
+    /** Recorded by the user. GymOS does not interpret it. */
+    outcome: text('outcome', { enum: ['pending', 'no_reaction', 'reaction', 'unsure'] })
+      .notNull()
+      .default('pending'),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('patch_tests_user_idx').on(t.userId, t.checkAt)],
+);
+
+export const groomingAppointments = sqliteTable(
+  'grooming_appointments',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    kind: text('kind').notNull().default('other'),
+    scheduledAt: text('scheduled_at').notNull(),
+    location: text('location').notNull().default(''),
+    notes: text('notes').notNull().default(''),
+    completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('grooming_appointments_user_idx').on(t.userId, t.scheduledAt)],
+);
+
+/* ------------------------------------------------------------- wardrobe */
+
+export const wardrobeItems = sqliteTable(
+  'wardrobe_items',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    category: text('category').notNull(),
+    colors: text('colors', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    fabric: text('fabric').notNull().default(''),
+    /** As printed by the manufacturer. Not a body measurement. */
+    sizeLabel: text('size_label').notNull().default(''),
+    occasionTags: text('occasion_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    seasonTags: text('season_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    formality: integer('formality').notNull().default(2),
+    warmth: integer('warmth').notNull().default(2),
+    favourite: integer('favourite', { mode: 'boolean' }).notNull().default(false),
+    timesWorn: integer('times_worn').notNull().default(0),
+    lastWornAt: text('last_worn_at'),
+    needsCare: integer('needs_care', { mode: 'boolean' }).notNull().default(false),
+    assetId: text('asset_id').references(() => privateMediaAssets.id, { onDelete: 'set null' }),
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('wardrobe_items_user_idx').on(t.userId, t.archived)],
+);
+
+export const outfitCombinations = sqliteTable(
+  'outfit_combinations',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    itemIds: text('item_ids', { mode: 'json' }).$type<string[]>().notNull(),
+    occasion: text('occasion').notNull().default('everyday'),
+    /** How the engine assembled it, or 'manual' when the user built it themselves. */
+    source: text('source', { enum: ['manual', 'suggested'] })
+      .notNull()
+      .default('manual'),
+    rationale: text('rationale').notNull().default(''),
+    favourite: integer('favourite', { mode: 'boolean' }).notNull().default(false),
+    timesWorn: integer('times_worn').notNull().default(0),
+    lastWornAt: text('last_worn_at'),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('outfit_combinations_user_idx').on(t.userId)],
+);
+
+export const outfitPlans = sqliteTable(
+  'outfit_plans',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    outfitId: text('outfit_id').references(() => outfitCombinations.id, { onDelete: 'set null' }),
+    occasion: text('occasion').notNull().default('everyday'),
+    status: text('status', { enum: ['planned', 'worn', 'skipped'] })
+      .notNull()
+      .default('planned'),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('outfit_plans_uq').on(t.userId, t.date, t.occasion)],
+);
+
+/* ---------------------------------------------------------------- voice */
+
+export const VOICE_PRACTICE_KINDS = [
+  'free_speaking',
+  'script_reading',
+  'presentation',
+  'interview',
+  'pronunciation',
+  'conversation',
+] as const;
+
+export const communicationGoals = sqliteTable(
+  'communication_goals',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('communication_goals_user_idx').on(t.userId, t.active)],
+);
+
+export const voicePracticeSessions = sqliteTable(
+  'voice_practice_sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: VOICE_PRACTICE_KINDS }).notNull(),
+    scriptId: text('script_id'),
+    goalId: text('goal_id').references(() => communicationGoals.id, { onDelete: 'set null' }),
+    date: text('date').notNull(),
+    durationSeconds: integer('duration_seconds').notNull().default(0),
+    /** Known because the user read a script of known length. Null for free speaking. */
+    scriptWordCount: integer('script_word_count'),
+    wordsPerMinute: integer('words_per_minute'),
+    /** Measured from audio energy in the browser, never guessed. */
+    pauseCount: integer('pause_count'),
+    longestPauseMs: integer('longest_pause_ms'),
+    speakingRatio: real('speaking_ratio'),
+    /** Tapped by the user during playback. There is no transcription in this build. */
+    fillerTally: integer('filler_tally'),
+    selfRatedClarity: integer('self_rated_clarity'),
+    reflection: text('reflection').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('voice_sessions_user_idx').on(t.userId, t.date)],
+);
+
+export const voiceRecordings = sqliteTable(
+  'voice_recordings',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => voicePracticeSessions.id, { onDelete: 'cascade' }),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => privateMediaAssets.id, { onDelete: 'cascade' }),
+    durationSeconds: integer('duration_seconds').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('voice_recordings_uq').on(t.sessionId, t.assetId)],
+);
+
+/**
+ * One observation about a practice session.
+ *
+ * `source` is the honesty mechanism: 'measured' means the number came from the
+ * audio or the script, 'self_reported' means the user supplied it. Nothing is
+ * inferred, and there is no transcription in this build.
+ */
+export const communicationFeedback = sqliteTable(
+  'communication_feedback',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => voicePracticeSessions.id, { onDelete: 'cascade' }),
+    metric: text('metric').notNull(),
+    value: real('value'),
+    unit: text('unit').notNull().default(''),
+    source: text('source', { enum: ['measured', 'self_reported'] }).notNull(),
+    observation: text('observation').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('communication_feedback_session_idx').on(t.sessionId)],
+);
+
+/* -------------------------------------------------------------- hygiene */
+
+export const HYGIENE_CADENCES = ['daily', 'weekly', 'custom'] as const;
+
+export const hygieneRoutines = sqliteTable(
+  'hygiene_routines',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    category: text('category').notNull().default('general'),
+    cadence: text('cadence', { enum: HYGIENE_CADENCES }).notNull().default('daily'),
+    daysOfWeek: text('days_of_week', { mode: 'json' }).$type<number[]>().notNull().default([]),
+    everyNDays: integer('every_n_days'),
+    reminderTime: text('reminder_time'),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('hygiene_routines_user_idx').on(t.userId, t.active)],
+);
+
+export const hygieneTasks = sqliteTable(
+  'hygiene_tasks',
+  {
+    id: text('id').primaryKey(),
+    routineId: text('routine_id')
+      .notNull()
+      .references(() => hygieneRoutines.id, { onDelete: 'cascade' }),
+    orderIndex: integer('order_index').notNull(),
+    label: text('label').notNull(),
+    notes: text('notes').notNull().default(''),
+  },
+  (t) => [index('hygiene_tasks_routine_idx').on(t.routineId, t.orderIndex)],
+);
+
+export const hygieneCheckins = sqliteTable(
+  'hygiene_checkins',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    routineId: text('routine_id')
+      .notNull()
+      .references(() => hygieneRoutines.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    completedTaskIds: text('completed_task_ids', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    snoozedUntil: text('snoozed_until'),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('hygiene_checkins_uq').on(t.routineId, t.date)],
+);
+
+export const personalCareSupplies = sqliteTable(
+  'personal_care_supplies',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    category: text('category').notNull().default('general'),
+    runningLow: integer('running_low', { mode: 'boolean' }).notNull().default(false),
+    lastReplacedAt: text('last_replaced_at'),
+    replaceEveryDays: integer('replace_every_days'),
+    notes: text('notes').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('care_supplies_user_idx').on(t.userId, t.runningLow)],
+);
+
+/* --------------------------------------------------------------- review */
+
+export const REVIEW_PERIODS = ['weekly', 'fortnightly', 'monthly', 'manual'] as const;
+
+/**
+ * A generated review. `sections` holds only observations derived from rows the user
+ * actually created; the generator has no path to an appearance judgement because it
+ * never reads media, only counts.
+ */
+export const personalReviewReports = sqliteTable(
+  'personal_review_reports',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    periodKind: text('period_kind', { enum: REVIEW_PERIODS }).notNull(),
+    periodStart: text('period_start').notNull(),
+    periodEnd: text('period_end').notNull(),
+    sections: text('sections', { mode: 'json' }).$type<unknown>().notNull(),
+    userGoals: text('user_goals', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    nextActions: text('next_actions', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    generatorVersion: text('generator_version').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('review_reports_uq').on(t.userId, t.periodKind, t.periodStart)],
+);
+
+export const reviewPreferences = sqliteTable('review_preferences', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  cadence: text('cadence', { enum: REVIEW_PERIODS }).notNull().default('weekly'),
+  /** Which modules the user wants in their review. Empty means all enabled ones. */
+  includedSections: text('included_sections', { mode: 'json' })
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/* ---------------------------------------------------- wellness relations */
+
+export const privateMediaAssetsRelations = relations(privateMediaAssets, ({ one, many }) => ({
+  owner: one(users, { fields: [privateMediaAssets.userId], references: [users.id] }),
+  grants: many(mediaAccessGrants),
+}));
+
+export const photoCheckinsRelations = relations(photoCheckins, ({ many }) => ({
+  assets: many(photoCheckinAssets),
+}));
+
+export const groomingRoutinesRelations = relations(groomingRoutines, ({ many }) => ({
+  steps: many(groomingRoutineSteps),
+  logs: many(groomingRoutineLogs),
+}));
+
+export const hygieneRoutinesRelations = relations(hygieneRoutines, ({ many }) => ({
+  tasks: many(hygieneTasks),
+  checkins: many(hygieneCheckins),
+}));
+
+export const voicePracticeSessionsRelations = relations(voicePracticeSessions, ({ many }) => ({
+  recordings: many(voiceRecordings),
+  feedback: many(communicationFeedback),
 }));

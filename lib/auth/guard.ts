@@ -39,3 +39,33 @@ export class CsrfError extends Error {
     this.name = 'CsrfError';
   }
 }
+
+/**
+ * Stricter origin check for handlers that accept non-JSON bodies.
+ *
+ * `multipart/form-data` is a CORS-"simple" content type, so a cross-site HTML form
+ * can post one without a preflight. The JSON content-type gate therefore does not
+ * protect file uploads, and these handlers insist on positive same-origin proof
+ * instead of treating a missing Origin header as benign.
+ */
+export async function assertSameOriginStrict(): Promise<void> {
+  const hdrs = await headers();
+  const site = hdrs.get('sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'none') throw new CsrfError();
+
+  const origin = hdrs.get('origin');
+  const host = hdrs.get('host');
+  if (!origin) {
+    // Modern browsers always send Origin on POST. Without it and without a
+    // same-origin Sec-Fetch-Site, there is nothing to verify, so refuse.
+    if (!site) throw new CsrfError('This endpoint requires a same-origin request.');
+    return;
+  }
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw new CsrfError();
+  }
+  if (!host || originHost !== host) throw new CsrfError();
+}

@@ -18,8 +18,10 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    // The full journey is expensive, so it runs once on desktop. The public-site and
-    // accessibility specs run on all three viewports.
+    // The full journey and the wellness suite are expensive, so they run once on desktop.
+    // The public-site, accessibility and navigation specs run on all three viewports —
+    // the navigation one because the grouped sidebar and the four-slot bottom bar are a
+    // responsive decision.
     {
       name: 'desktop',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } },
@@ -28,7 +30,7 @@ export default defineConfig({
       // Chromium-based tablet emulation: only Chromium is installed, so the WebKit
       // iPad profile is deliberately not used.
       name: 'tablet',
-      testMatch: /public\.spec\.ts/,
+      testMatch: /(?:public|nav)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 834, height: 1112 },
@@ -38,7 +40,7 @@ export default defineConfig({
     },
     {
       name: 'mobile',
-      testMatch: /public\.spec\.ts/,
+      testMatch: /(?:public|nav)\.spec\.ts/,
       use: { ...devices['Pixel 7'] },
     },
   ],

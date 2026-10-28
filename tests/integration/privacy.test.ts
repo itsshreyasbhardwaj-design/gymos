@@ -157,12 +157,108 @@ describe('data export', () => {
       'ingredientPrices',
       'activityRecords',
       'milestones',
+      // Wellness modules. An export that silently omits a module is not an export.
+      'privateMedia',
+      'mediaAccessGrants',
+      'mediaDeletionEvents',
+      'journalEntries',
+      'photoCheckins',
+      'photoCheckinAssets',
+      'checkinSchedules',
+      'groomingRoutines',
+      'groomingRoutineSteps',
+      'groomingRoutineLogs',
+      'skincareProducts',
+      'skincareJournal',
+      'patchTests',
+      'groomingAppointments',
+      'wardrobeItems',
+      'outfitCombinations',
+      'outfitPlans',
+      'communicationGoals',
+      'voicePracticeSessions',
+      'voiceRecordings',
+      'communicationFeedback',
+      'hygieneRoutines',
+      'hygieneTasks',
+      'hygieneCheckins',
+      'personalCareSupplies',
+      'personalReviewReports',
+      'reviewPreferences',
     ]) {
       expect(data[key], `${key} missing from export`).toBeDefined();
     }
     expect((data.workoutSessions as unknown[]).length).toBeGreaterThan(0);
     expect((data.exerciseLogs as unknown[]).length).toBeGreaterThan(0);
     expect((data.equipmentProfiles as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it('includes wellness rows, including child rows reached only through a parent', async () => {
+    const { db } = dbClient;
+    const { newId } = await import('@/lib/auth/ids');
+
+    const groomingId = newId();
+    db.insert(schema.groomingRoutines)
+      .values({ id: groomingId, userId, name: 'Evening', slot: 'evening' })
+      .run();
+    db.insert(schema.groomingRoutineSteps)
+      .values({ id: newId(), routineId: groomingId, orderIndex: 0, label: 'Cleanser' })
+      .run();
+
+    const hygieneId = newId();
+    db.insert(schema.hygieneRoutines)
+      .values({ id: hygieneId, userId, name: 'Morning', cadence: 'daily' })
+      .run();
+    db.insert(schema.hygieneTasks)
+      .values({ id: newId(), routineId: hygieneId, orderIndex: 0, label: 'Brush teeth' })
+      .run();
+
+    const practiceId = newId();
+    db.insert(schema.voicePracticeSessions)
+      .values({ id: practiceId, userId, kind: 'script_reading', date: '2026-03-10', durationSeconds: 90 })
+      .run();
+    db.insert(schema.communicationFeedback)
+      .values({
+        id: newId(),
+        sessionId: practiceId,
+        metric: 'pause_count',
+        value: 7,
+        unit: 'count',
+        source: 'measured',
+      })
+      .run();
+
+    db.insert(schema.wardrobeItems)
+      .values({ id: newId(), userId, name: 'Navy shirt', category: 'top' })
+      .run();
+    db.insert(schema.personalJournalEntries)
+      .values({ id: newId(), userId, date: '2026-03-10', body: 'a private note' })
+      .run();
+
+    const data = account.buildExport(userId) as Record<string, unknown[]>;
+    expect(data.groomingRoutines).toHaveLength(1);
+    expect(data.groomingRoutineSteps).toHaveLength(1);
+    expect(data.hygieneRoutines).toHaveLength(1);
+    expect(data.hygieneTasks).toHaveLength(1);
+    expect(data.voicePracticeSessions).toHaveLength(1);
+    expect(data.communicationFeedback).toHaveLength(1);
+    expect(data.wardrobeItems).toHaveLength(1);
+    expect(data.journalEntries).toHaveLength(1);
+    expect(JSON.stringify(data)).toContain('a private note');
+  });
+
+  it('explains that media files are not embedded rather than omitting them silently', () => {
+    const data = account.buildExport(userId) as Record<string, unknown>;
+    expect(String(data.mediaNote)).toMatch(/not embedded in this file/i);
+    expect(String(data.mediaNote)).toMatch(/Media privacy/i);
+    expect(String(data.mediaEncryption)).toMatch(/key/i);
+  });
+
+  it('never exports the media encryption parameters, which would weaken the files', () => {
+    const json = JSON.stringify(account.buildExport(userId));
+    expect(json).not.toContain('ivHex');
+    expect(json).not.toContain('authTagHex');
+    expect(json).not.toContain('storagePath');
   });
 
   it('never includes the password hash', () => {
@@ -289,6 +385,65 @@ describe('account deletion', () => {
     const mealPlanIds = new Set(db.select().from(schema.mealPlans).all().map((m) => m.id));
     for (const meal of db.select().from(schema.plannedMeals).all()) {
       expect(mealPlanIds.has(meal.mealPlanId)).toBe(true);
+    }
+
+    // Wellness child rows, which hang off a parent rather than off the user.
+    const groomingIds = new Set(
+      db.select().from(schema.groomingRoutines).all().map((r) => r.id),
+    );
+    for (const step of db.select().from(schema.groomingRoutineSteps).all()) {
+      expect(groomingIds.has(step.routineId)).toBe(true);
+    }
+    const hygieneIds = new Set(db.select().from(schema.hygieneRoutines).all().map((r) => r.id));
+    for (const task of db.select().from(schema.hygieneTasks).all()) {
+      expect(hygieneIds.has(task.routineId)).toBe(true);
+    }
+    const practiceIds = new Set(
+      db.select().from(schema.voicePracticeSessions).all().map((r) => r.id),
+    );
+    for (const fb of db.select().from(schema.communicationFeedback).all()) {
+      expect(practiceIds.has(fb.sessionId)).toBe(true);
+    }
+    for (const rec of db.select().from(schema.voiceRecordings).all()) {
+      expect(practiceIds.has(rec.sessionId)).toBe(true);
+    }
+    const checkinIds = new Set(db.select().from(schema.photoCheckins).all().map((r) => r.id));
+    for (const asset of db.select().from(schema.photoCheckinAssets).all()) {
+      expect(checkinIds.has(asset.checkinId)).toBe(true);
+    }
+  });
+
+  it('takes the wellness rows with the account', () => {
+    const { db } = dbClient;
+    const remaining = {
+      grooming: db
+        .select()
+        .from(schema.groomingRoutines)
+        .where(drizzle.eq(schema.groomingRoutines.userId, userId))
+        .all(),
+      hygiene: db
+        .select()
+        .from(schema.hygieneRoutines)
+        .where(drizzle.eq(schema.hygieneRoutines.userId, userId))
+        .all(),
+      wardrobe: db
+        .select()
+        .from(schema.wardrobeItems)
+        .where(drizzle.eq(schema.wardrobeItems.userId, userId))
+        .all(),
+      journal: db
+        .select()
+        .from(schema.personalJournalEntries)
+        .where(drizzle.eq(schema.personalJournalEntries.userId, userId))
+        .all(),
+      practice: db
+        .select()
+        .from(schema.voicePracticeSessions)
+        .where(drizzle.eq(schema.voicePracticeSessions.userId, userId))
+        .all(),
+    };
+    for (const [name, rows] of Object.entries(remaining)) {
+      expect(rows, `${name} rows survived deletion`).toHaveLength(0);
     }
   });
 

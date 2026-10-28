@@ -431,9 +431,26 @@ describe('SAFETY 8 — medical and injury input never produces treatment advice'
     }
   });
 
-  it('routes appearance and crash-diet questions to a safety redirect', () => {
-    for (const q of ['how do I lose weight fast', 'rate my body', 'am i fat', 'how many calories should i eat']) {
-      expect(detectIntent(q).id, `"${q}" must be redirected`).toBe('safety_redirect');
+  it('routes appearance and crash-diet questions to a refusal, never to a feature', () => {
+    // Appearance wording has its own refusal, with copy specific to body and face
+    // questions; crash-diet wording keeps the general safety redirect. Either way the
+    // requirement is the same: never an answer.
+    const refusals = [
+      'safety_redirect',
+      'appearance_redirect',
+      'skin_concern_redirect',
+      'voice_judgement_redirect',
+    ];
+    for (const q of [
+      'how do I lose weight fast',
+      'rate my body',
+      'am i fat',
+      'how many calories should i eat',
+      'how do i look',
+      'rate my face out of 10',
+      'estimate my body fat from this photo',
+    ]) {
+      expect(refusals, `"${q}" must be refused`).toContain(detectIntent(q).id);
     }
   });
 

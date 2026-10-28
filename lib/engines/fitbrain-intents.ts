@@ -12,6 +12,16 @@ export type IntentId =
   | 'shorter_session'
   | 'equipment_question'
   | 'safety_redirect'
+  // Wellness modules
+  | 'wellness_overview'
+  | 'routine_due'
+  | 'outfit_question'
+  | 'voice_practice'
+  | 'media_privacy'
+  // Honest refusals, each with its own explanation
+  | 'appearance_redirect'
+  | 'skin_concern_redirect'
+  | 'voice_judgement_redirect'
   | 'unknown';
 
 export interface IntentRule {
@@ -47,8 +57,47 @@ export const INTENT_RULES: IntentRule[] = [
   },
   {
     id: 'safety_redirect',
-    any: ['lose weight fast', 'how many calories should i', 'crash diet', 'skip meals', 'fat burn', 'how do i look', 'rate my body', 'am i fat', 'body fat percentage'],
+    // Appearance wording moved to `appearance_redirect`, which gives the same refusal
+    // with an explanation specific to body and face questions.
+    any: ['lose weight fast', 'how many calories should i', 'crash diet', 'skip meals', 'fat burn'],
     weight: 100,
+  },
+  // Appearance questions get their own refusal rather than the injury one, because
+  // the honest answer is different: GymOS *could* not answer this, and *would* not.
+  {
+    id: 'appearance_redirect',
+    any: [
+      'rate my face', 'rate my looks', 'rate my body', 'how attractive', 'am i attractive',
+      'am i ugly', 'how do i look', 'how good do i look', 'score my face', 'rate my photo',
+      'rate my picture', 'looksmax', 'looks max', 'glow up score', 'facial harmony',
+      'am i good looking', 'out of 10', 'out of ten', 'my jawline', 'my face shape',
+      'body fat from', 'estimate my body fat', 'what body type am i', 'am i fat',
+      'do i look fat', 'compare me to', 'better looking', 'body fat percentage',
+    ],
+    // Above the general safety redirect, so an appearance question gets the answer
+    // written for it rather than the injury one.
+    weight: 110,
+  },
+  {
+    id: 'skin_concern_redirect',
+    any: [
+      'is this acne', 'do i have acne', 'what is this rash', 'this rash', 'this spot',
+      'this mole', 'my skin condition', 'diagnose my skin', 'is my skin healthy',
+      'eczema', 'psoriasis', 'rosacea', 'fungal', 'infection on my', 'melasma',
+      'what cream should i use for', 'prescribe', 'retinoid dose', 'is this a cyst',
+      'skin cancer',
+    ],
+    weight: 110,
+  },
+  {
+    id: 'voice_judgement_redirect',
+    any: [
+      'is my voice good', 'do i sound good', 'rate my voice', 'does my voice sound',
+      'is my voice attractive', 'my voice too high', 'my voice too deep', 'sound more masculine',
+      'sound more feminine', 'make my voice deeper', 'transcribe my recording',
+      'what did i say', 'transcript of my',
+    ],
+    weight: 110,
   },
   { id: 'explain_plan', any: ['why this plan', 'explain my plan', 'why these exercises', 'why am i doing', 'what is my plan', 'my plan', 'this week'], weight: 20 },
   { id: 'explain_substitution', any: ['substitute', 'swap', 'replace', 'instead of', 'alternative to', 'different exercise'], weight: 22 },
@@ -70,6 +119,50 @@ export const INTENT_RULES: IntentRule[] = [
     weight: 26,
   },
   { id: 'set_preference', any: ["i don't like", 'i dont like', 'i hate', 'never show', 'favourite', 'favorite', 'i prefer', 'remember that'], weight: 24 },
+  {
+    id: 'wellness_overview',
+    any: [
+      'my review', 'weekly review', 'fortnightly review', 'how is everything going',
+      'overview of everything', 'across everything', 'personal review', 'how was my week',
+    ],
+    weight: 22,
+  },
+  {
+    id: 'routine_due',
+    any: [
+      'due today', 'what should i do today', 'my routine', 'my routines', 'skincare routine',
+      'grooming routine', 'hygiene', 'brush', 'moisturis', 'moisturiz', 'shave', 'wash my',
+      'what is due', 'anything due', 'expired product', 'running low',
+    ],
+    none: ['workout', 'exercise'],
+    weight: 20,
+  },
+  {
+    id: 'outfit_question',
+    any: [
+      'what should i wear', 'what do i wear', 'outfit', 'wardrobe', 'clothes', 'shirt',
+      'trousers', 'what to wear', 'dress for', 'plan my clothes',
+    ],
+    weight: 20,
+  },
+  {
+    id: 'voice_practice',
+    any: [
+      'practise speaking', 'practice speaking', 'speaking practice', 'my pace', 'speak slower',
+      'speak faster', 'words per minute', 'interview practice', 'pitch practice',
+      'filler words', 'um and uh', 'public speaking',
+    ],
+    weight: 20,
+  },
+  {
+    id: 'media_privacy',
+    any: [
+      'my photos', 'my pictures', 'my recordings', 'delete my photos', 'delete my recordings',
+      'who can see', 'is this private', 'encrypted', 'storage used', 'stop storing',
+      'turn off photos', 'revoke', 'share my photo',
+    ],
+    weight: 24,
+  },
   { id: 'app_help', any: ['how do i use', 'where is', 'how does gymos', 'what is realitysync', 'what is equipment dna', 'pro plan', 'subscription', 'export my data', 'delete my account'], weight: 16 },
 ];
 
@@ -106,5 +199,10 @@ export const FITBRAIN_CAPABILITIES = [
   { id: 'find_recipe', label: 'Find a recipe that fits', example: 'Quick vegetarian dinner idea' },
   { id: 'explain_meal_swap', label: 'Swap a planned meal', example: 'Something else for Thursday dinner' },
   { id: 'set_preference', label: 'Remember a preference', example: "I don't like burpees" },
+  { id: 'wellness_overview', label: 'Review everything at once', example: 'How was my week overall?' },
+  { id: 'routine_due', label: 'Say what is due today', example: 'Anything due in my routines today?' },
+  { id: 'outfit_question', label: 'Help with an outfit', example: 'What should I wear to work?' },
+  { id: 'voice_practice', label: 'Set up speaking practice', example: 'I want to practise my pace' },
+  { id: 'media_privacy', label: 'Explain or change media privacy', example: 'Who can see my photos?' },
   { id: 'app_help', label: 'Explain a GymOS feature', example: 'What is RealitySync?' },
 ] as const;

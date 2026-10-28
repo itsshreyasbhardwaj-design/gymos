@@ -6,6 +6,11 @@ export default defineConfig({
     include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
     globals: true,
     pool: 'forks',
+    // Every integration suite registers accounts in `beforeAll`, and registration runs
+    // scrypt at N=2^15 by design. With one worker spawned per file those hooks contend,
+    // and the default 10s ceiling produced a cold-run "Hook timed out" on a suite that
+    // completes in under 3s in isolation. The work is not slow; the ceiling was.
+    hookTimeout: 60_000,
     coverage: { provider: 'v8', include: ['lib/**/*.ts'], reporter: ['text', 'json-summary'] },
   },
   resolve: {

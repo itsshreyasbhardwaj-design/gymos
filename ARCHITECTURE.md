@@ -13,7 +13,7 @@ app/                 Routes, Server Components, Server Actions, route handlers
   onboarding/        Nine-step set-up
   (app)/             Authenticated application shell + pages
   admin/             Content review area (role-gated)
-  api/               JSON route handlers (homepage preview, FitBrain)
+  api/               JSON route handlers (homepage preview, FitBrain, private media)
   share/             Public read-only shared grocery lists
 
 components/          React components (server and client)
@@ -23,12 +23,14 @@ lib/
   engines/           Pure domain logic — no I/O, no database, fully unit-testable
   services/          Database access + authorization. The only layer that touches SQL.
   auth/              Password hashing, sessions, rate limiting, CSRF guards
+  media/             Envelope encryption and metadata stripping for private files
   db/                Drizzle schema, client, seed
   ui/                Small UI helpers
 
 drizzle/             Committed migration SQL
 tests/               unit · integration · e2e
 scripts/             migrate, seed, demo, validation, smoke
+data/media/          Encrypted private files — outside the served tree, never committed
 ```
 
 ### Layer rules
@@ -37,11 +39,12 @@ scripts/             migrate, seed, demo, validation, smoke
 | --- | --- | --- |
 | `lib/content` | nothing but types | — |
 | `lib/engines` | `lib/content` | touch the database, read `next/headers`, perform I/O |
-| `lib/services` | `lib/engines`, `lib/db`, `lib/auth` | contain planning or filtering rules |
+| `lib/media` | `node:crypto`, `node:fs` | touch the database, know about users or consent |
+| `lib/services` | `lib/engines`, `lib/db`, `lib/auth`, `lib/media` | contain planning or filtering rules |
 | `app/**` | `lib/services`, `components` | query the database directly |
 
-This is why the engines have 224 unit tests that run in under a second with no database:
-they are ordinary functions over plain data.
+This is why the engines carry the bulk of the 549 unit tests, which run in about a
+second with no database: they are ordinary functions over plain data.
 
 ## Data flow for a generated plan
 
@@ -152,3 +155,25 @@ Reduced motion, larger text and higher contrast are stored on the profile and ap
 | `engines/entitlements.ts` | Plan matrix and limit decisions |
 | `engines/fitbrain-intents.ts` | Deterministic intent rules |
 | `engines/rng.ts` | Seeded PRNG for reproducible generation |
+| `engines/care.ts` | Product expiry and period-after-opening, routine due dates, conservative patch-test verdicts, neutral adherence copy |
+| `engines/outfit.ts` | Colour harmony, formality and weather scoring; explained suggestions; wardrobe gaps. No body model exists in it, by design |
+| `engines/voice-metrics.ts` | Pace against a known script, pause and energy analysis over raw samples, neutral practice suggestions |
+| `engines/hygiene.ts` | Cadence arithmetic for three cadences, supply runway, neutral activity summaries |
+| `engines/review.ts` | The cross-module review. Two hard rules in code: no shaming, and no observation without a row behind it |
+
+### The media layer
+
+`lib/media` sits beside `lib/auth` rather than inside `lib/services`, because it knows
+nothing about users, consent or entitlements — it seals bytes and strips metadata, and
+that is all. `lib/services/media.ts` is the layer that knows *who* may do it:
+
+```
+app/api/media/[id]   authenticate → ownership or grant (in SQL) → decrypt → serve
+app/api/media        strict same-origin → authenticate → age → consent → entitlement
+                     → type + size → strip metadata → seal → write 0600 → insert row
+```
+
+The order in the write path is deliberate. Every check runs before a byte is read, and
+metadata is stripped *before* encryption, so the plaintext that reached the disk never
+contained it either. There is no code path that writes `private_media_assets` without
+going through this service, and no static path that serves what it wrote.

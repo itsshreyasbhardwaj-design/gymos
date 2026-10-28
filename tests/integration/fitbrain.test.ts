@@ -93,7 +93,28 @@ describe('grounded answers', () => {
 
   it('never answers an appearance question', () => {
     const answer = ask('rate my body');
-    expect(answer.intent).toBe('safety_redirect');
+    expect(answer.intent).toBe('appearance_redirect');
+    // The refusal must be explicit, and must not smuggle a judgement into the prose.
+    expect(answer.text).toMatch(/does not rate how anyone looks/i);
+    expect(`${answer.text} ${answer.bullets.join(' ')}`).not.toMatch(
+      /\b(you look|your body is|attractive|out of ten|score of)\b/i,
+    );
+    expect(answer.bullets.join(' ')).toMatch(/no attractiveness score/i);
+  });
+
+  it('refuses to diagnose skin from a description', () => {
+    const answer = ask('what is this rash on my arm');
+    expect(answer.intent).toBe('skin_concern_redirect');
+    expect(answer.bullets.join(' ')).toMatch(/does not diagnose/i);
+    expect(answer.bullets.join(' ')).toMatch(/doctor or dermatologist/i);
+    expect(answer.disclaimer).toMatch(/not medical/i);
+  });
+
+  it('refuses to transcribe or judge a recording, and says why', () => {
+    const answer = ask('transcribe my recording');
+    expect(answer.intent).toBe('voice_judgement_redirect');
+    expect(answer.bullets.join(' ')).toMatch(/no speech recognition/i);
+    expect(answer.bullets.join(' ')).toMatch(/will not pretend otherwise/i);
   });
 
   it('reports honestly when it cannot match a question', () => {
