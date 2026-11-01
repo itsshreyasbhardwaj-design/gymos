@@ -31,7 +31,7 @@
     "e2e:server": "npm run e2e:setup && GYMOS_DB_PATH=./data/e2e.db next start -p 3210 -H 127.0.0.1"
   },
   "dependencies": {
-    "@hookform/resolvers": "^5.9.2",
+    "@hookform/resolvers": "^6.0.2",
     "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
